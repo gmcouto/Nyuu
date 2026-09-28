@@ -9,6 +9,8 @@ describe('NZB Generator', function() {
 		var data = [];
 		var nzb = new Newbz(
 			{
+				yenc_encrypted: 'true',
+				password: 'test123',
 				'testing & stuffing around' : 'test value',
 				another_tag : '"hello world"'
 			},
@@ -25,8 +27,8 @@ describe('NZB Generator', function() {
 			['alt.binaries.test', 'tildes suck&&&&', '"made up group"'],
 			null
 		);
-		nzb.addSegment(123, 'blabla@test.test');
-		nzb.addSegment(111, 'invalid<name>@place');
+		nzb.addSegment(123, 'blabla@test.test', 1);
+		nzb.addSegment(111, 'invalid<name>@place', 2);
 		nzb.file(
 			'Silly&File',
 			'A <Poster>',
@@ -40,6 +42,10 @@ describe('NZB Generator', function() {
 		
 		if(!data.indexOf('<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">'))
 			throw new Error('Missing NZB tag');
+		if(!data.indexOf('<meta type="yenc_encrypted">true</meta>'))
+			throw new Error('Missing encryption meta tag');
+		if(!data.indexOf('<meta type="password">test123</meta>'))
+			throw new Error('Missing password meta tag');
 		if(!data.indexOf('<meta type="testing &amp; stuffing around">test value</meta>'))
 			throw new Error('Missing 1st meta tag');
 		if(!data.indexOf('<meta type="another_tag">&quot;hello world&quot;</meta>'))
@@ -52,6 +58,8 @@ describe('NZB Generator', function() {
 			throw new Error('Missing particular group');
 		if(!data.indexOf(' number="2"'))
 			throw new Error('Missing 2nd segment');
+		assert.notEqual(data.indexOf('segmentIndex="1"'), -1);
+		assert.notEqual(data.indexOf('segmentIndex="2"'), -1);
 		if(!data.indexOf('invalid&lt;name&gt;@place'))
 			throw new Error('Missing 2nd segment ID');
 		if(!data.indexOf('</file><file '))
@@ -67,6 +75,8 @@ describe('NZB Generator', function() {
 		var data2 = [];
 		nzb = new Newbz(
 			{
+				yenc_encrypted: 'true',
+				password: 'test123',
 				'testing & stuffing around' : 'test value',
 				another_tag : '"hello world"'
 			},
@@ -83,8 +93,8 @@ describe('NZB Generator', function() {
 			['alt.binaries.test', 'tildes suck&&&&', '"made up group"'],
 			null,
 			[
-				[123, 'blabla@test.test'],
-				[111, 'invalid<name>@place']
+				[123, 'blabla@test.test', 1],
+				[111, 'invalid<name>@place', 2]
 			]
 		);
 		nzb.wholeFile(
