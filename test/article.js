@@ -99,6 +99,24 @@ it('basic (large) pooled post test', function(done) {
 	done();
 });
 
+it('encrypts body and control lines before yEnc encoding', function() {
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	var a = new MultiEncoder('file', 6, 6, null, {
+		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
+	});
+	a.setHeaders({});
+	var post = a.generate(toBuffer('secret'));
+	var wire = post.data.toString('binary');
+	assert.equal(post.inputLen, 6);
+	assert.equal(post.wireLen, post.inputLen);
+	assert.equal(post.segmentIndex, 1);
+	assert.equal(post.data.subarray(post.postPos, post.postPos + 16).toString('hex'), salt.toString('hex'));
+	assert.ok(wire.indexOf('=ybegin') < 0);
+	assert.ok(wire.indexOf('=yencryption') < 0);
+	assert.ok(post.postLen > post.postPos);
+});
+
 it('empty file test', function(done) {
 	var a = new MultiEncoder('file', 0, 1);
 	assert.equal(a.parts, 1);
