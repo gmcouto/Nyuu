@@ -347,7 +347,18 @@ NZB Output Options:
        --nzb-poster          Override the poster specified in the NZB, which,
                              is taken from the From header by default. Details
                              are the same as `--nzb-subject` described above.
-                             Default is {value}
+                              Default is {value}
+
+Encryption Options:
+
+       --encrypt             Enable yEnc body and control-line encryption (flag option).
+                             Article bodies are encrypted with XChaCha20-Poly1305 and
+                             control lines are encrypted with Radix 253 NIST SP 800-38G FF1.
+       --encrypt-password    Password used for yEnc body and control-line encryption.
+                             Required when `--encrypt` is specified.
+       --encrypt-control-lines Encrypt yEnc control lines (=ybegin, =ypart, =yend,
+                             =yencryption) using Radix 253 FF1 (flag option, default on).
+                             Use `--no-encrypt-control-lines` to disable.
 
 Advanced Tuning Options:
 
