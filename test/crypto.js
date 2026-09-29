@@ -6,7 +6,7 @@ var path = require('path');
 var cryptoCore = require('../lib/crypto');
 var ff1 = require('../lib/ff1');
 
-var vectorsDir = path.resolve(__dirname, '../../yenc-encryption-standards/test-vectors');
+var vectorsDir = path.resolve(__dirname, 'test-vectors');
 var argonVectors = require(path.join(vectorsDir, 'argon2id.json'));
 var nonceVectors = require(path.join(vectorsDir, 'nonce_tweak.json'));
 var bodyVectors = require(path.join(vectorsDir, 'body_encryption.json'));
