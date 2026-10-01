@@ -1067,7 +1067,7 @@ if(argv.encrypt || argv['encrypt-password'] !== undefined || argv['encrypt-contr
 	if(!argv['encrypt-password'])
 		error('`--encrypt-password` is required when encryption is enabled');
 	ulOpts.encryptionPassword = argv['encrypt-password'];
-	ulOpts.encryptControlLines = true;
+	ulOpts.encryptControlLines = (argv['encrypt-control-lines'] !== false);
 }
 
 if(ulOpts.connectionThreads) {
