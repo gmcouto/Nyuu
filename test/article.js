@@ -112,9 +112,28 @@ it('encrypts body and control lines before yEnc encoding', function() {
 	assert.equal(post.wireLen, post.inputLen);
 	assert.equal(post.segmentIndex, 1);
 	assert.equal(post.data.subarray(post.postPos, post.postPos + 16).toString('hex'), salt.toString('hex'));
+	assert.equal(post.data.subarray(post.postPos + 16, post.postPos + 20).readUInt32BE(0), 1);
 	assert.ok(wire.indexOf('=ybegin') < 0);
 	assert.ok(wire.indexOf('=yencryption') < 0);
 	assert.ok(post.postLen > post.postPos);
+});
+
+it('emits canonical 5-token =yencryption line when controlLines is false', function() {
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	[null, new BufferPool(4096)].forEach(function(pool) {
+		var a = new MultiEncoder('file', 6, 6, null, {
+			encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: false, segmentIndex: 1}
+		});
+		a.setHeaders({});
+		var post = a.generate(toBuffer('secret'), pool);
+		var wire = post.data.toString('ascii');
+		assert.match(wire, /=yencryption cipher=XChaCha20-Poly1305 salt=[0-9a-f]{32} index=[0-9a-f]{8} tag=[0-9a-f]{32}/);
+		var m = wire.match(/=yencryption cipher=XChaCha20-Poly1305 salt=([0-9a-f]{32}) index=([0-9a-f]{8}) tag=([0-9a-f]{32})/);
+		assert.equal(m[1], salt.toString('hex'));
+		assert.equal(m[2], '00000001');
+		assert.equal(m[3], post.encryption.tag.toString('hex'));
+	});
 });
 
 it('empty file test', function(done) {
