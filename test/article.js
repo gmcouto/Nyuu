@@ -136,6 +136,29 @@ it('emits canonical 5-token =yencryption line when controlLines is false', funct
 	});
 });
 
+it('re-encrypts plaintext on reloadData without length mismatch or plaintext leak', function() {
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	[true, false].forEach(function(controlLines) {
+		[null, new BufferPool(4096)].forEach(function(pool) {
+			var a = new MultiEncoder('file', 500, 500, null, {
+				encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: controlLines, segmentIndex: 1}
+			});
+			a.setHeaders({});
+			var plain = Buffer.alloc(500, 0);
+			var post = a.generate(plain, pool);
+			var oldData = Buffer.from(post.data);
+			var oldTag = Buffer.from(post.encryption.tag);
+			post.releaseData();
+			assert.equal(post.data, null);
+			post.reloadData(plain);
+			assert.ok(post.data);
+			assert.equal(oldData.toString('hex'), post.data.toString('hex'));
+			assert.equal(oldTag.toString('hex'), post.encryption.tag.toString('hex'));
+		});
+	});
+});
+
 it('empty file test', function(done) {
 	var a = new MultiEncoder('file', 0, 1);
 	assert.equal(a.parts, 1);
