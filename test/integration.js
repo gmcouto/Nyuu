@@ -26,10 +26,10 @@ describe('Encrypted upload pipeline', function() {
 		nzb.end();
 		var wire = post.data.toString('ascii');
 		var xml = Buffer.concat(output).toString('utf8');
-		assert.match(wire, /=yencryption cipher=XChaCha20-Poly1305 salt=[0-9a-f]{32} tag=[0-9a-f]{32}/);
+		assert.match(wire, /=yencryption cipher=XChaCha20-Poly1305 salt=[0-9a-f]{32} index=[0-9a-f]{8} tag=[0-9a-f]{32}/);
 		assert.doesNotMatch(wire, /hello/);
 		assert.match(xml, /meta type="yenc_encrypted">true/);
 		assert.match(xml, /meta type="password">test123/);
-		assert.match(xml, /segmentIndex="1"/);
+		assert.doesNotMatch(xml, /segmentIndex/);
 	});
 });
