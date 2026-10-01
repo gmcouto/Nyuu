@@ -58,8 +58,10 @@ describe('NZB Generator', function() {
 			throw new Error('Missing particular group');
 		if(!data.indexOf(' number="2"'))
 			throw new Error('Missing 2nd segment');
-		assert.notEqual(data.indexOf('segmentIndex="1"'), -1);
-		assert.notEqual(data.indexOf('segmentIndex="2"'), -1);
+		assert.equal(data.indexOf('segmentIndex='), -1);
+		assert.doesNotMatch(data, /segmentIndex/);
+		assert.match(data, /<segment bytes="123" number="1">blabla@test\.test<\/segment>/);
+		assert.match(data, /<segment bytes="111" number="2">invalid&lt;name&gt;@place<\/segment>/);
 		if(!data.indexOf('invalid&lt;name&gt;@place'))
 			throw new Error('Missing 2nd segment ID');
 		if(!data.indexOf('</file><file '))
@@ -110,5 +112,33 @@ describe('NZB Generator', function() {
 		data2 = Buffer.concat(data2).toString();
 		
 		assert.equal(data, data2);
+	});
+
+	it('emits clean standard NZB 1.1 XML without segmentIndex in buffered mode', function() {
+		var NZBBuffered = require('../lib/nzbbuffer');
+		var data = [];
+		var nzb = new NZBBuffered(
+			{
+				yenc_encrypted: 'true',
+				password: 'test123'
+			},
+			function(blob, encoding) {
+				data.push(toBuffer(blob, encoding));
+			},
+			true,
+			'utf8'
+		);
+		var file = nzb.file('test.bin', 'poster', ['alt.binaries.test'], 2, null);
+		file.set(0, 100, 'msg1@test', 1);
+		file.set(1, 200, 'msg2@test', 2);
+		nzb.end();
+
+		var xml = Buffer.concat(data).toString();
+		assert.equal(xml.indexOf('segmentIndex='), -1);
+		assert.doesNotMatch(xml, /segmentIndex/);
+		assert.match(xml, /<segment bytes="100" number="1">msg1@test<\/segment>/);
+		assert.match(xml, /<segment bytes="200" number="2">msg2@test<\/segment>/);
+		assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
+		assert.match(xml, /<meta type="password">test123<\/meta>/);
 	});
 });
