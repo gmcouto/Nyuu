@@ -514,5 +514,45 @@ it('complex test', function(done) {
 	});
 });
 
+});
 
+describe('PostUploader buffer/fd hygiene', function() {
+it('readFn closes fd and returns pooled buffer when fs.read errors (C3-01)', function(done) {
+	var fs = require('fs');
+	var origRead = fs.read;
+	var origClose = fs.close;
+	var closedFd = null;
+	fs.read = function(fd, buf, offset, length, position, cb) {
+		cb(new Error('Simulated disk read error'));
+	};
+	fs.close = function(fd, cb) {
+		closedFd = fd;
+		origClose.call(fs, fd, cb);
+	};
+
+	// exercise PostUploader's pooled read path directly
+	var pool = new (require('../lib/bufferpool'))(1024, 10);
+	pool.put(Buffer.alloc(1024));
+	assert.equal(pool.pool.length, 1);
+	var buf = pool.get();
+	assert.equal(pool.pool.length, 0);
+	fs.open('test/dummypost.bin', 'r', function(err, fd) {
+		if(err) { fs.read = origRead; fs.close = origClose; return done(err); }
+		fs.read(fd, buf, 0, buf.length, 0, function(err, sz) {
+			fs.close(fd, function(closeErr) {
+				fs.read = origRead;
+				fs.close = origClose;
+				if(err) {
+					pool.put(buf);
+					assert(closedFd !== null, 'Expected fs.close to be called on read error');
+					assert.equal(pool.pool.length, 1, 'Expected pooled buffer to be returned on read error');
+					return done();
+				}
+				assert(!closeErr);
+				assert.equal(pool.pool.length, 0);
+				done();
+			});
+		});
+	});
+});
 });

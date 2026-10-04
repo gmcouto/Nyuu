@@ -304,4 +304,27 @@ it('test readRange', function(done) {
 		});
 	});
 });
+
+it('test readRange closes fd when fs.read errors (C3-03)', function(done) {
+	var fs = require('fs');
+	var origRead = fs.read;
+	var origClose = fs.close;
+	var closedFd = null;
+	fs.read = function(fd, buf, offset, length, position, cb) {
+		cb(new Error('Simulated read error'));
+	};
+	fs.close = function(fd, cb) {
+		closedFd = fd;
+		origClose.call(fs, fd, cb);
+	};
+	var r = new BufferedFileReader('./test/10bytes.txt', 10, allocBuffer(20));
+	var buf = allocBuffer(4);
+	r.readRange(0, buf, function(err, b) {
+		fs.read = origRead;
+		fs.close = origClose;
+		assert(err, 'Expected readRange error');
+		assert(closedFd !== null, 'Expected fs.close to be called on error');
+		done();
+	});
+});
 });
