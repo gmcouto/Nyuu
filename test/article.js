@@ -159,6 +159,80 @@ it('re-encrypts plaintext on reloadData without length mismatch or plaintext lea
 	});
 });
 
+it('pooled post grows undersized pooled buffer on reloadData instead of silently truncating article', function() {
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	// build an oversized post once to learn its exact wire length
+	var a = new MultiEncoder('f', 600, 600, null, {
+		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: false, segmentIndex: 1}
+	});
+	a.setHeaders({});
+	var reference = a.generate(Buffer.alloc(600));
+	var expectedLen = reference.postPos + reference.postLen;
+
+	// reload path hands the post a pooled buffer that is smaller than the body:
+	// the post must be grown, never silently clipped by Buffer.copy
+	var tinyPool = new BufferPool(expectedLen - 100);
+	tinyPool.put(Buffer.alloc(expectedLen - 100));
+	var a2 = new MultiEncoder('f', 600, 600, null, {
+		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: false, segmentIndex: 1}
+	});
+	a2.setHeaders({});
+	var post = a2.generate(Buffer.alloc(600), tinyPool);
+	var goodData = Buffer.from(post.data);
+	post.releaseData();
+	// ensure the pool hands back an undersized buffer on reload
+	tinyPool.pool = [Buffer.alloc(expectedLen - 100)];
+	post.reloadData(Buffer.alloc(600));
+	assert.equal(post.data.length, expectedLen);
+	assert.equal(post.data.toString('hex'), goodData.toString('hex'));
+	// the full body must be intact: final yend terminator present at the very end
+	assert(post.data.toString('ascii').endsWith('\r\n.\r\n'));
+	// the =yencryption header line is present and atomic (controlLines: false path)
+	assert.match(post.data.toString('ascii'), /=yencryption cipher=XChaCha20-Poly1305 salt=[0-9a-f]{32} index=[0-9a-f]{8} tag=[0-9a-f]{32}\r\n/);
+});
+
+it('pooled post survives undersized pool buffer with control-line encryption', function() {
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	var a = new MultiEncoder('f', 600, 600, null, {
+		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
+	});
+	a.setHeaders({});
+	var reference = a.generate(Buffer.alloc(600));
+	var expectedLen = reference.postPos + reference.postLen;
+
+	var tinyPool = new BufferPool(expectedLen - 100);
+	tinyPool.put(Buffer.alloc(expectedLen - 100));
+	var a2 = new MultiEncoder('f', 600, 600, null, {
+		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
+	});
+	a2.setHeaders({});
+	var post = a2.generate(Buffer.alloc(600), tinyPool);
+	assert.equal(post.data.length, expectedLen);
+	// Line 1 bootstrap prefix bytes are the FF1-encrypted control line's salt+index, unsplit and intact
+	assert.equal(post.data.subarray(post.postPos, post.postPos + 16).toString('hex'), salt.toString('hex'));
+	assert.equal(post.data.subarray(post.postPos + 16, post.postPos + 20).readUInt32BE(0), 1);
+});
+
+it('failed unpooled reloadData leaves no stale body state for subsequent reloads', function() {
+	var a = new MultiEncoder('test.bin', 10, 10);
+	a.setHeaders({});
+	var p = a.generate(toBuffer('0123456789'));
+	var good = toBuffer(p.data);
+	p.releaseData();
+	assert.equal(p.data, null);
+	// a wrong-length reload must throw without corrupting state
+	assert.throws(function() {
+		p.reloadData(toBuffer('0123456789extra'));
+	}, /Article length mismatch encountered/);
+	// bufs must not have accumulated a stale encoded body
+	assert.equal(p.bufs.length, 1);
+	// a correct reload must then produce the byte-identical original article
+	p.reloadData(toBuffer('0123456789'));
+	assert.equal(p.data.toString('hex'), good.toString('hex'));
+});
+
 it('empty file test', function(done) {
 	var a = new MultiEncoder('file', 0, 1);
 	assert.equal(a.parts, 1);
