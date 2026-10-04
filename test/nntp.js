@@ -1656,6 +1656,47 @@ it('should handle server responding early during chunked post upload', function(
 	], done);
 });
 
+	it('should handle malformed response during chunked post upload', function(done) {
+	var server, client;
+	var sendNextChunks = 0;
+	waterfall([
+		setupTest.bind(null, {requestRetries: 0, uploadChunkSize: 4, throttle: function(cost, cb) {
+			if(sendNextChunks) {
+				cb();
+				sendNextChunks--;
+			}
+		}}),
+		function(_server, _client, cb) {
+			server = _server;
+			client = _client;
+			client.connect(cb);
+		},
+		function(cb) {
+			assert.equal(client.state, 'connected');
+			
+			var msg = 'X:b\r\n\r\nm\r\n.\r\n';
+			server.expect('POST\r\n', function() {
+				// send a malformed (non-NNN) line after the first chunk, mid-upload
+				this.expect(msg.substring(0, 4), function() {
+					this.respond('garbage line without response code');
+					sendNextChunks = 10;
+				});
+				sendNextChunks = 1;
+				this.respond('340  Send article');
+			});
+			client.post(new DummyPost(msg), function(err) {
+				// must surface as a protocol error to the retry path, not crash the process
+				// (this exercises the post-upload early-response branch with m == null)
+				assert.equal(err.code, 'invalid_response');
+				cb();
+			});
+		},
+		function(cb) {
+			closeTest(client, server, cb);
+		}
+	], done);
+});
+
 it('should handle disconnect during chunked post upload, and retry', function(done) {
 	var server, client;
 	var sendNextChunks = 0;
