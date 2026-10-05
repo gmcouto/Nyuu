@@ -15,8 +15,7 @@ secret:
     - name: config-comment-example-password
       match: mysecret
     # ── test-vector JSON passwords (files are frozen/integrity-checked —
-    #    per-literal matches, never modification; entries copied verbatim
-    #    from nzbget/.gitguardian.yaml — identical frozen fixtures) ──
+    #    per-literal matches, never modification; identical frozen fixtures) ──
     - name: test-vector-wrong-password
       match: wrong_password_999
     - name: test-password-wrong-control
@@ -50,8 +49,7 @@ secret:
     # test/full.js SSL tests and the npm test gate 212/18/0)
     - "test/_ssl.key"
     - "test/_ssl.crt"
-    # frozen conformance test vectors (integrity-checked by
-    # nzb-encryption/scripts/verify_submodule_isolation.py) — path-suppress only
+    # frozen conformance test vectors — path-suppress only
     - "test/test-vectors/**"
     # belt-and-braces; untracked today
     - "**/node_modules/**"
