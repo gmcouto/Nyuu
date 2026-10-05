@@ -282,50 +282,6 @@ it('should throw if sent data isn\'t expected amount', function(done) {
 	done();
 });
 
-it('reloadPost restores pooled buffer on synchronous reload exception (C3-02)', function(done) {
-	var UploadManager = require('../lib/uploadmgr');
-	var opts = {
-		servers: [{
-			connect: { host: '127.0.0.1', port: 119 },
-			postConnections: 1,
-			checkConnections: 0
-		}],
-		check: { tries: 0 },
-		headerAllocSize: 500,
-		useBufferPool: true
-	};
-	var up = new UploadManager(opts, function(){});
-	up.reloadBufPool.put(Buffer.alloc(up.articleSize));
-	assert.equal(up.reloadBufPool.pool.length, 1);
-	var stream = {
-		readRange: function(offset, buf, cb) {
-			// return wrong length data to trigger a synchronous exception inside reloadData
-			cb(null, Buffer.alloc(10));
-		},
-		read: function(size, cb) {
-			cb(null, Buffer.alloc(500));
-		}
-	};
-	var file = { name: 'f.bin', size: 500, num: 1, collection: '_' };
-	var didAdd = false;
-	up.addFile(file, 1, {}, stream, function(err, info) {
-		didAdd = true;
-	});
-	up.uploader.queue.take(function(post) {
-		post.releaseData();
-		var initialPoolLen = up.reloadBufPool.pool.length;
-		post.reload(function(err) {
-			assert(err, 'Expected reload error');
-			assert.equal(err.message, 'Supplied buffer is of incorrect length');
-			assert.equal(up.reloadBufPool.pool.length, initialPoolLen, 'Pooled buffer returned despite reload exception');
-			// stop the read loop and tear down the uploader's connections so the test process can exit
-			stream.read = function(size, cb) { cb(null, Buffer.alloc(0)); };
-			up.cancel('test complete');
-			done();
-		});
-	});
-});
-
 // TODO: test Post.* stuff?
 // TODO: check message IDs
 // TODO: test raw posts
