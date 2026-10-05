@@ -1064,10 +1064,16 @@ if('filename' in argv)
 // map custom meta tags
 if(argv.meta) util.extend(ulOpts.nzb.metaData, argv.meta);
 if(argv.encrypt || argv['encrypt-password'] !== undefined || argv['encrypt-control-lines']) {
+	if(argv['encrypt-control-lines'] === false)
+		error('Disabling control-line encryption is not supported (both standards are required)');
 	if(!argv['encrypt-password'])
 		error('`--encrypt-password` is required when encryption is enabled');
 	ulOpts.encryptionPassword = argv['encrypt-password'];
 	ulOpts.encryptControlLines = true;
+	if(ulOpts.nzb && typeof ulOpts.nzb == 'object' && ulOpts.nzb.metaData) {
+		ulOpts.nzb.metaData.yenc_encrypted = 'true';
+		ulOpts.nzb.metaData.password = ulOpts.encryptionPassword;
+	}
 }
 
 if(ulOpts.connectionThreads) {

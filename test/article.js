@@ -117,6 +117,22 @@ it('encrypts body and control lines before yEnc encoding', function() {
 	assert.ok(post.postLen > post.postPos);
 });
 
+it('encrypted post reloadData re-encrypts raw plaintext into identical ciphertext with matching wire CRC', function() {
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	[null, new BufferPool(1), new BufferPool(4096)].forEach(function(pool) {
+		var a = new MultiEncoder('file', 6, 6, null, {
+			encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
+		});
+		a.setHeaders({});
+		var post = a.generate(toBuffer('secret'), pool);
+		var initialWire = Buffer.from(post.data);
+		post.releaseData();
+		post.reloadData(toBuffer('secret'));
+		assert.equal(post.data.toString('hex'), initialWire.toString('hex'));
+	});
+});
+
 it('empty file test', function(done) {
 	var a = new MultiEncoder('file', 0, 1);
 	assert.equal(a.parts, 1);
@@ -131,6 +147,24 @@ it('empty file test', function(done) {
 	assert.notEqual(postData.indexOf(' pcrc32=00000000'), -1);
 	assert.notEqual(postData.indexOf(' size=0 '), -1);
 	
+	done();
+});
+
+it('encrypted empty file test produces valid AEAD tag and 0-byte ciphertext (GAP-33-06)', function(done) {
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	var a = new MultiEncoder('empty.bin', 0, 100, null, {
+		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
+	});
+	a.setHeaders({});
+	var post = a.generate(toBuffer(''));
+	assert.equal(post.part, 1);
+	assert.equal(post.inputLen, 0);
+	assert.equal(post.wireLen, 0);
+	assert.equal(post.encryption.ciphertext.length, 0);
+	assert.equal(post.encryption.tag.length, 16);
+	assert.equal(post.segmentIndex, 1);
+	assert.ok(post.data.length > 0);
 	done();
 });
 

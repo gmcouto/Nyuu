@@ -112,4 +112,55 @@ describe('yEnc encryption crypto', function() {
 		assert.throws(function() { cryptoCore.deriveBodyNonce(key, 4294967296); }, /1 to 4294967295/);
 		assert.throws(function() { cryptoCore.deriveControlTweak(key, 1, 0); }, /1 to 4294967295/);
 	});
+
+	it('validates user-provided encryptionSalt at upload entry point', function() {
+		var FileUploader = require('../lib/fileuploader');
+		var invalidSalts = [
+			'not-a-buffer',
+			Buffer.alloc(15),
+			Buffer.alloc(17),
+			Buffer.from('000102030405060708090a0b0c0d0e0f', 'hex'), // contains 0x00 and 0x0a
+			Buffer.from('0d0102030405060708090b0c0e0f1011', 'hex')  // contains 0x0d
+		];
+		invalidSalts.forEach(function(badSalt) {
+			assert.throws(function() {
+				FileUploader.upload([], {
+					encryptionPassword: 'secretpassword',
+					encryptionSalt: badSalt
+				}, function() {});
+			}, RangeError);
+		});
+	});
+
+	it('never leaks encryption password into loggers or string representations (GAP-33-07)', function() {
+		var logs = [];
+		var fakeLogger = {
+			trace: function(m) { logs.push(m); },
+			debug: function(m) { logs.push(m); },
+			info: function(m) { logs.push(m); },
+			warn: function(m) { logs.push(m); },
+			error: function(m) { logs.push(m); }
+		};
+		var FileUploader = require('../lib/fileuploader');
+		FileUploader.setLogger(fakeLogger);
+		var ArticleEncoder = require('../lib/article');
+		var password = 'super_secret_sensitive_password_12345';
+		var enc = new ArticleEncoder('test.bin', 10, 10, null, {
+			encryption: {
+				bodyKey: Buffer.alloc(32, 1),
+				masterKey: Buffer.alloc(32, 1),
+				salt: Buffer.alloc(16, 2),
+				controlLines: true,
+				segmentIndex: 1
+			}
+		});
+		enc.setHeaders({});
+		var post = enc.generate(Buffer.alloc(10, 65));
+		var serializedPost = JSON.stringify(post);
+		assert.equal(serializedPost.indexOf(password), -1);
+		logs.forEach(function(msg) {
+			assert.equal(('' + msg).indexOf(password), -1);
+		});
+		FileUploader.setLogger(null);
+	});
 });

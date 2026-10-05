@@ -111,4 +111,15 @@ describe('NZB Generator', function() {
 		
 		assert.equal(data, data2);
 	});
+
+	it('strictly validates segmentIndex as integer in 1..4294967295 rejecting invalid input and XML injection', function() {
+		var nzb = new Newbz({}, function() {});
+		nzb.file('test.file', 'Poster', ['alt.test']);
+		var invalid = ['1" injected="true', 0, -1, 4294967296, 1.5, '01', 'NaN', 'abc'];
+		invalid.forEach(function(val) {
+			assert.throws(function() {
+				nzb.addSegment(100, 'msg@test', val);
+			}, RangeError);
+		});
+	});
 });

@@ -299,7 +299,7 @@ using Radix 253 NIST SP 800-38G FF1.
 CLI flags:
 - `--encrypt`: Enable yEnc body and control-line encryption (flag option).
 - `--encrypt-password <pass>`: Specify the encryption password (required when encryption is enabled).
-- `--encrypt-control-lines`: Enable control-line encryption (enabled by default when `--encrypt` is active; `--no-encrypt-control-lines` to disable).
+- `--encrypt-control-lines`: Enable control-line encryption (enabled by default when `--encrypt` is active; both standards are always applied together in v1.0).
 
 Example:
 ```bash

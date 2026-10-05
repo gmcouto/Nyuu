@@ -358,7 +358,8 @@ Encryption Options:
                              Required when `--encrypt` is specified.
        --encrypt-control-lines Encrypt yEnc control lines (=ybegin, =ypart, =yend,
                              =yencryption) using Radix 253 FF1 (flag option, default on).
-                             Use `--no-encrypt-control-lines` to disable.
+                             Disabling control-line encryption is not permitted under
+                             the v1.0 standard (both body and control lines required).
 
 Advanced Tuning Options:
 
