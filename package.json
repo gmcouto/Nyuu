@@ -16,6 +16,9 @@
     "url": "git+https://github.com/animetosho/nyuu.git"
   },
   "main": "lib/fileuploader.js",
+  "scripts": {
+    "test": "mocha"
+  },
   "bin": "bin/nyuu.js",
   "preferGlobal": true,
   "engines": {
