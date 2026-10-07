@@ -226,8 +226,10 @@ it('failed unpooled reloadData leaves no stale body state for subsequent reloads
 	assert.throws(function() {
 		p.reloadData(toBuffer('0123456789extra'));
 	}, /Article length mismatch encountered/);
-	// bufs must not have accumulated a stale encoded body
-	assert.equal(p.bufs.length, 1);
+	// bufs must not have accumulated a stale encoded body — the prefix is the
+	// full header framing (all headers + blank line), not just the Message-ID
+	assert.equal(p.bufs.length, p._headerBufs.length);
+	assert.equal(p.bufs[p.bufs.length - 1].toString(), '\r\n');
 	// a correct reload must then produce the byte-identical original article
 	p.reloadData(toBuffer('0123456789'));
 	assert.equal(p.data.toString('hex'), good.toString('hex'));
