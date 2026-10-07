@@ -358,6 +358,69 @@ it('should handle basic tasks', function(done) {
 	], done);
 });
 
+// RFC 3977 §3.1.1 dot-stuffing regression tests (Phase 58 Task 9 / T-58-12):
+// article lines starting with '.' (e.g. an encrypted Line 1 bootstrap whose salt
+// byte is 0x2E) must be stuffed before hitting the wire.
+it('should dot-stuff article lines starting with a dot (RFC 3977 §3.1.1)', function(done) {
+	var server, client;
+	waterfall([
+		setupTest.bind(null, {}),
+		function(_server, _client, cb) {
+			server = _server;
+			client = _client;
+			client.connect(cb);
+		},
+		function(cb) {
+			var msg = 'Header: x\r\n\r\n.from dot-stuffed line\r\nplain\r\n.\r\n';
+			var stuffed = 'Header: x\r\n\r\n..from dot-stuffed line\r\nplain\r\n.\r\n';
+			server.expect('POST\r\n', function() {
+				this.expect(stuffed, '240 <new-article> Article received ok');
+				this.respond('340  Send article');
+			});
+			client.post(new DummyPost(msg), cb);
+		},
+		function(a, cb) {
+			assert.equal(a, 'new-article');
+			cb();
+		},
+		function(cb) {
+			closeTest(client, server, cb);
+		}
+	], done);
+});
+
+it('should dot-stuff with atLineStart persisting across chunk boundaries and mid-chunk LFs', function(done) {
+	var server, client;
+	waterfall([
+		setupTest.bind(null, {uploadChunkSize: 4}),
+		function(_server, _client, cb) {
+			server = _server;
+			client = _client;
+			client.connect(cb);
+		},
+		function(cb) {
+			// Body exercises every boundary case:
+			//  - chunk boundary exactly before a line-leading '.' (line 2)
+			//  - a '.' after an LF that occurs MID-CHUNK (line 4)
+			//  - a CRLF split across chunks (uploadChunkSize 4)
+			var msg = 'Header: x\r\n\r\n.start\r\nabc\r\n.mid\r\nend.\r\n.ok\r\n.\r\n';
+			var stuffed = 'Header: x\r\n\r\n..start\r\nabc\r\n..mid\r\nend.\r\n..ok\r\n.\r\n';
+			server.expect('POST\r\n', function() {
+				this.expect(stuffed, '240 <new-article> Article received ok');
+				this.respond('340  Send article');
+			});
+			client.post(new DummyPost(msg), cb);
+		},
+		function(a, cb) {
+			assert.equal(a, 'new-article');
+			cb();
+		},
+		function(cb) {
+			closeTest(client, server, cb);
+		}
+	], done);
+});
+
 it('should handle XREPLIC posting', function(done) {
 	var server, client, mathRandom;
 	waterfall([

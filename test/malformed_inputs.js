@@ -17,38 +17,27 @@ var malformedData = JSON.parse(malformedRaw.toString('utf8'));
 var masterKey = Buffer.alloc(32, 7);
 var validSalt = Buffer.from('1a2b3c4d5e6f7890abcdef1234567890', 'hex');
 
-// mirrors canonical v1.1 =yencryption header grammar validator
+// mirrors the canonical v1.2 strict =yencryption header grammar validator
+// (yenc-encryption-standards/scripts/test_conformance_vectors.py:parse_yencryption_line_v11)
 function parseYencryptionLine(line) {
 	if(line !== line.trim())
 		throw new Error('INVALID_WHITESPACE');
+	if(line.indexOf('\t') >= 0 || line.indexOf('  ') >= 0)
+		throw new Error('INVALID_WHITESPACE');
 	var tokens = line.split(' ');
-	if(tokens.length > 5) {
-		var hasDup = false;
-		for(var i = 0; i < tokens.length; i++) {
-			for(var j = i + 1; j < tokens.length; j++) {
-				if(tokens[i] === tokens[j]) hasDup = true;
-			}
-		}
-		if(hasDup) throw new Error('DUPLICATE_PARAMETER');
-		throw new Error('EXTRA_PARAMETER');
-	}
 	if(tokens.length !== 5 || tokens.some(function(t) { return !t; }))
 		throw new Error('INVALID_TOKEN_COUNT');
 	if(tokens[0] !== '=yencryption')
 		throw new Error('INVALID_PREFIX');
-	if(tokens[1] === 'cipher=')
-		throw new Error('INVALID_CIPHER');
-	if(tokens[1] !== 'cipher=XChaCha20-Poly1305') {
-		if(tokens[1].startsWith('salt=')) throw new Error('REORDERED_HEADER');
+	if(tokens[1] !== 'cipher=XChaCha20-Poly1305')
 		throw new Error('UNSUPPORTED_CIPHER');
-	}
 	if(!tokens[2].startsWith('salt=') || !tokens[3].startsWith('index=') || !tokens[4].startsWith('tag='))
-		throw new Error('REORDERED_HEADER');
+		throw new Error('INVALID_TOKEN_ORDER');
 	var saltHex = tokens[2].slice(5), indexHex = tokens[3].slice(6), tagHex = tokens[4].slice(4);
 	if(saltHex.length !== 32)
 		throw new Error('INVALID_SALT_LENGTH');
 	if(!/^[0-9a-f]{32}$/.test(saltHex))
-		throw new Error(/^[0-9a-fA-F]{32}$/.test(saltHex) ? 'INVALID_SALT_HEX' : 'INVALID_SALT_HEX');
+		throw new Error(/^[0-9a-fA-F]{32}$/.test(saltHex) ? 'UPPERCASE_HEX' : 'INVALID_SALT_HEX');
 	if(indexHex.length !== 8)
 		throw new Error('INVALID_INDEX_LENGTH');
 	if(!/^[0-9a-f]{8}$/.test(indexHex))
@@ -59,7 +48,13 @@ function parseYencryptionLine(line) {
 		throw new Error(/^[0-9a-fA-F]{32}$/.test(tagHex) ? 'UPPERCASE_HEX' : 'INVALID_TAG_HEX');
 	if(parseInt(indexHex, 16) === 0)
 		throw new Error('ZERO_SEGMENT_INDEX');
-	return {salt: Buffer.from(saltHex, 'hex'), segmentIndex: parseInt(indexHex, 16), tag: Buffer.from(tagHex, 'hex')};
+	// CR-02: forbidden bytes in uint32_be(segmentIndex)
+	var idx = parseInt(indexHex, 16);
+	if([idx & 0xFF, (idx >>> 8) & 0xFF, (idx >>> 16) & 0xFF, (idx >>> 24) & 0xFF].some(function(b) {
+		return b === 0x0A || b === 0x0D;
+	}))
+		throw new Error('FORBIDDEN_SEGMENT_INDEX_BYTE');
+	return {salt: Buffer.from(saltHex, 'hex'), segmentIndex: idx, tag: Buffer.from(tagHex, 'hex')};
 }
 
 function canonicalLineFor(salt, segmentIndex, tag) {
@@ -75,6 +70,18 @@ function extractBootstrapFromLine1(wire) {
 	var segmentIndex = wire.readUInt32BE(16);
 	if(salt.some(function(b) { return b === 0 || b === 10 || b === 13; }))
 		throw new Error('INVALID_SALT_CHARACTER');
+	// CR-02: uint32_be(segmentIndex) bytes 0x0A/0x0D would split Line 1 on the
+	// wire; rejected under PROVIDER_FAILOVER like the canonical grammar validator
+	if([0, 10, 13].some(function(byte) {
+		return segmentIndex === byte ||
+			((segmentIndex >>> 8) & 0xFF) === byte ||
+			((segmentIndex >>> 16) & 0xFF) === byte ||
+			((segmentIndex >>> 24) & 0xFF) === byte;
+	})) {
+		if(segmentIndex === 0)
+			throw new Error('ZERO_SEGMENT_INDEX');
+		throw new Error('FORBIDDEN_SEGMENT_INDEX_BYTE');
+	}
 	if(segmentIndex === 0)
 		throw new Error('ZERO_SEGMENT_INDEX');
 	return {salt: salt, segmentIndex: segmentIndex};
