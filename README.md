@@ -308,9 +308,8 @@ XML attributes on `<segment>` elements, including only `<meta type="yenc_encrypt
 and `<meta type="password">` in `<head>`.
 
 CLI flags:
-- `--encrypt`: Enable yEnc body and control-line encryption (flag option).
+- `--encrypt`: Enable yEnc body and control-line encryption (flag option). Encryption is always combined: control lines are encrypted whenever `--encrypt` is active.
 - `--encrypt-password <pass>`: Specify the encryption password (required when encryption is enabled).
-- `--encrypt-control-lines`: Enable control-line encryption (enabled by default when `--encrypt` is active; `--no-encrypt-control-lines` to disable).
 
 Example:
 ```bash

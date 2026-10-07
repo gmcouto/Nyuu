@@ -409,10 +409,6 @@ var optMap = {
 		type: 'string',
 		map: 'encryptionPassword'
 	},
-	'encrypt-control-lines': {
-		type: 'bool',
-		map: 'encryptControlLines'
-	},
 	'yenc-name': {
 		type: 'string'
 	},
@@ -1063,11 +1059,10 @@ if('filename' in argv)
 
 // map custom meta tags
 if(argv.meta) util.extend(ulOpts.nzb.metaData, argv.meta);
-if(argv.encrypt || argv['encrypt-password'] !== undefined || argv['encrypt-control-lines']) {
+if(argv.encrypt || argv['encrypt-password'] !== undefined) {
 	if(!argv['encrypt-password'])
 		error('`--encrypt-password` is required when encryption is enabled');
 	ulOpts.encryptionPassword = argv['encrypt-password'];
-	ulOpts.encryptControlLines = (argv['encrypt-control-lines'] !== false);
 }
 
 if(ulOpts.connectionThreads) {
