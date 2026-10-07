@@ -149,4 +149,43 @@ describe('yEnc encryption crypto', function() {
 		assert.throws(function() { ff1.encryptControlLine(line, masterKey, 0, 1, validSalt); }, /1 to 4294967295/);
 		assert.throws(function() { ff1.encryptControlLine(line, masterKey, 4294967296, 1, validSalt); }, /1 to 4294967295/);
 	});
+
+	it('skips CR-02 forbidden segmentIndex bytes when allocating indices', function() {
+		// CR-02: uint32_be(segmentIndex) bytes 0x0A/0x0D would split Line 1 on the wire.
+		// assign-and-advance semantics: counter initialized at 0, first article gets 1.
+		assert.equal(cryptoCore.nextSafeSegmentIndex(0), 1, 'first article receives index 1');
+
+		// canonical index_allocation.json (VEC-07) skip vectors
+		var indexVectors = require(path.join(vectorsDir, 'index_allocation.json')).vectors;
+		indexVectors.forEach(function(vector) {
+			assert.equal(cryptoCore.nextSafeSegmentIndex(vector.candidate_index - 1), vector.expected_assigned_index, vector.id);
+		});
+
+		// contiguous run across the 265..270 span: 265 -> 267 (266 skipped) -> 268 -> 270 (269 skipped) -> 271
+		var span = [];
+		var idx = 264;
+		for(var i = 0; i < 7; i++) {
+			idx = cryptoCore.nextSafeSegmentIndex(idx);
+			span.push(idx);
+		}
+		assert.deepEqual(span, [265, 267, 268, 270, 271, 272, 273], '265..270 span skips 266 and 269');
+
+		assert(cryptoCore.hasForbiddenSegmentIndexByte(10));
+		assert(cryptoCore.hasForbiddenSegmentIndexByte(13));
+		assert(cryptoCore.hasForbiddenSegmentIndexByte(266));
+		assert(cryptoCore.hasForbiddenSegmentIndexByte(269));
+		assert(!cryptoCore.hasForbiddenSegmentIndexByte(11));
+		assert(!cryptoCore.hasForbiddenSegmentIndexByte(270));
+		// a forbidden byte in any of the four positions triggers the skip
+		assert(cryptoCore.hasForbiddenSegmentIndexByte(0x0A000000));
+		assert(cryptoCore.hasForbiddenSegmentIndexByte(0x000D0000));
+	});
+
+	it('exhausts segmentIndex space with an error instead of wrapping to zero', function() {
+		assert.throws(function() {
+			cryptoCore.nextSafeSegmentIndex(0xFFFFFFFF);
+		}, /segmentIndex space exhausted/);
+		// the last permitted index is still assignable
+		assert.equal(cryptoCore.nextSafeSegmentIndex(0xFFFFFFFE), 0xFFFFFFFF);
+	});
 });
