@@ -727,12 +727,14 @@ var dumpObj = function(o) {
 
 if(argv['help-full'] || argv.help) {
 	var helpText;
-	try {
-		// for embedding help text
-		helpText = require('./help.json')[argv['help-full'] ? 'full':'short'];
-	} catch(x) {
-		// use eval to prevent nexe trying to detect the variable
-		helpText = fs.readFileSync(eval('__'+'dirname') + '/../help' + (argv['help-full'] ? '-full':'') + '.txt').toString();
+	var helpJsonPath = __dirname + '/help.json';
+	if(fs.existsSync(helpJsonPath)) {
+		try {
+			helpText = JSON.parse(fs.readFileSync(helpJsonPath).toString())[argv['help-full'] ? 'full':'short'];
+		} catch(x) {}
+	}
+	if(!helpText) {
+		helpText = fs.readFileSync(__dirname + '/../help' + (argv['help-full'] ? '-full':'') + '.txt').toString();
 	}
 	console.error(helpText.replace(/^Nyuu(\r?\n)/, 'Nyuu v' + require('../package.json').version + '$1'));
 	process.exit(0);
