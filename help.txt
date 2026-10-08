@@ -71,7 +71,6 @@ Encryption Options:
 
        --encrypt             Enable yEnc body and control-line encryption (flag option)
        --encrypt-password    Password for yEnc body and control-line encryption
-       --encrypt-control-lines Encrypt control lines using Radix 253 FF1 (default on)
 
 UI Options:
 
