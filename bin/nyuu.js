@@ -1060,9 +1060,10 @@ if('filename' in argv)
 // map custom meta tags
 if(argv.meta) util.extend(ulOpts.nzb.metaData, argv.meta);
 if(argv.encrypt || argv['encrypt-password'] !== undefined) {
-	if(!argv['encrypt-password'])
+	var encPass = argv['encrypt-password'] !== undefined ? argv['encrypt-password'] : ulOpts.encryptionPassword;
+	if(!encPass)
 		error('`--encrypt-password` is required when encryption is enabled');
-	ulOpts.encryptionPassword = argv['encrypt-password'];
+	ulOpts.encryptionPassword = encPass;
 }
 
 if(ulOpts.connectionThreads) {

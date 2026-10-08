@@ -281,6 +281,43 @@ it('randomizeMessageID updates _headerBufs so reloadData does not revert message
 	assert.equal(p.data.toString().indexOf('Message-ID: <' + origId + '>'), -1);
 });
 
+it('PooledPost should synchronize _headerStr on randomizeMessageID and stripHeader after releaseData', function() {
+	var a = new MultiEncoder('testfile', 6, 6);
+	a.setHeaders({
+		Subject: 'Test Subject',
+		From: 'poster@example.com',
+		'X-Removable': 'remove-me'
+	});
+	var pool = new BufferPool(4096, 2);
+	var input = toBuffer('abcdef');
+	var p = a.generate(input, pool);
+	var origId = p.messageId;
+
+	// Release data buffer to trigger _headerStr caching
+	p.releaseData();
+	assert.equal(p.data, null);
+	assert.ok(p._headerStr);
+	assert.notEqual(p._headerStr.indexOf('X-Removable: remove-me'), -1);
+
+	// Randomize message ID while released
+	var newId = p.randomizeMessageID();
+	assert.notEqual(newId, origId);
+	assert.notEqual(p._headerStr.indexOf('Message-ID: <' + newId + '>'), -1);
+	assert.equal(p._headerStr.indexOf('Message-ID: <' + origId + '>'), -1);
+
+	// Strip header while released
+	assert.ok(p.stripHeader('X-Removable'));
+	assert.equal(p._headerStr.indexOf('X-Removable'), -1);
+
+	// Reload data and ensure it succeeds with synchronized header
+	p.reloadData(input);
+	assert.ok(p.data);
+	var postStr = p.data.toString();
+	assert.notEqual(postStr.indexOf('Message-ID: <' + newId + '>'), -1);
+	assert.equal(postStr.indexOf('Message-ID: <' + origId + '>'), -1);
+	assert.equal(postStr.indexOf('X-Removable'), -1);
+});
+
 it('empty file test', function(done) {
 	var a = new MultiEncoder('file', 0, 1);
 	assert.equal(a.parts, 1);
