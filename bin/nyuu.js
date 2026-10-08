@@ -759,9 +759,12 @@ if(argv['package-info']) {
 		async: parsePackage(require('../node_modules/async/package.json')),
 		yencode: parsePackage(require('../node_modules/yencode/package.json')),
 	};
-	try {
-		modules.nexe = parsePackage(require('../nexe/node_modules/nexe/package.json'));
-	} catch(x) {}
+	var nexePkgPath = __dirname + '/../nexe/node_modules/nexe/package.json';
+	if(fs.existsSync(nexePkgPath)) {
+		try {
+			modules.nexe = parsePackage(JSON.parse(fs.readFileSync(nexePkgPath).toString()));
+		} catch(x) {}
+	}
 	var m = {
 		'Packages': modules,
 		'Node Component Versions': process.versions,
