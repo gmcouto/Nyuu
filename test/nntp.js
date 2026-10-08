@@ -421,6 +421,40 @@ it('should dot-stuff with atLineStart persisting across chunk boundaries and mid
 	], done);
 });
 
+it('should dot-stuff with exact extraDots when exceeding 1024 dots', function(done) {
+	var server, client;
+	waterfall([
+		setupTest.bind(null, {}),
+		function(_server, _client, cb) {
+			server = _server;
+			client = _client;
+			client.connect(cb);
+		},
+		function(cb) {
+			var lines = [];
+			var stuffedLines = [];
+			for(var i = 0; i < 1100; i++) {
+				lines.push('.line' + i);
+				stuffedLines.push('..line' + i);
+			}
+			var msg = 'Header: x\r\n\r\n' + lines.join('\r\n') + '\r\n.\r\n';
+			var stuffed = 'Header: x\r\n\r\n' + stuffedLines.join('\r\n') + '\r\n.\r\n';
+			server.expect('POST\r\n', function() {
+				this.expect(stuffed, '240 <new-article> Article received ok');
+				this.respond('340  Send article');
+			});
+			client.post(new DummyPost(msg), cb);
+		},
+		function(a, cb) {
+			assert.equal(a, 'new-article');
+			cb();
+		},
+		function(cb) {
+			closeTest(client, server, cb);
+		}
+	], done);
+});
+
 it('should handle XREPLIC posting', function(done) {
 	var server, client, mathRandom;
 	waterfall([
