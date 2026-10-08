@@ -535,6 +535,13 @@ var optMap = {
 		type: 'array',
 		map: 'nzb/metaData/password'
 	},
+	'encrypt-password': {
+		type: 'string',
+		map: 'encryptPassword'
+	},
+	'encrypt': {
+		type: 'bool'
+	},
 	'nzb-cork': {
 		type: 'bool',
 		map: 'nzb/corkOutput'
@@ -1052,6 +1059,15 @@ if('filename' in argv)
 // map custom meta tags
 if(argv.meta) util.extend(ulOpts.nzb.metaData, argv.meta);
 
+var encPass = argv['encrypt-password'] || ulOpts.encryptPassword;
+if(encPass) {
+	if(!ulOpts.nzb) ulOpts.nzb = {};
+	if(!ulOpts.nzb.metaData) ulOpts.nzb.metaData = {};
+	ulOpts.nzb.metaData.password = [encPass];
+	ulOpts.nzb.metaData.encryption = ['combined'];
+	ulOpts.nzb.metaData.yenc_encrypted = ['true'];
+}
+
 if(ulOpts.connectionThreads) {
 	var numConnections = 0;
 	ulOpts.servers.forEach(function(server) {
@@ -1129,6 +1145,11 @@ if(argv['out']) {
 }
 // custom validation rules
 // TODO: more validation
+
+if(argv.encrypt && !argv['encrypt-password'] && !ulOpts.encryptPassword)
+	error('Cannot specify `encrypt` without `encrypt-password`');
+if(argv['encrypt-password'] === '')
+	error('Cannot specify empty `encrypt-password`');
 
 if(argv.quiet && argv.verbose)
 	error('Cannot specify both `quiet` and `verbose`');
@@ -1224,18 +1245,27 @@ var writeNewline = function() {
 	process.stderr.write('\n');
 };
 var clrRow = stdErrProgress ? '\x1b[0G\x1B[0K' : '';
+var scrubPassword = function(str) {
+	var pw = argv['encrypt-password'] || ulOpts.encryptPassword;
+	if(pw && typeof str === 'string' && str.indexOf(pw) !== -1) {
+		return str.split(pw).join('[SCRUBBED]');
+	}
+	return str;
+};
 var writeLog;
 if(argv.colorize) {
 	writeLog = function(col, type, msg) {
+		var outMsg = scrubPassword(msg.toString());
 		process.stderr.write(
-			clrRow + '\x1B['+col+'m' + logTimestamp('') + type + '\x1B[39m ' + msg.toString() + '\n'
+			clrRow + '\x1B['+col+'m' + logTimestamp('') + type + '\x1B[39m ' + outMsg + '\n'
 			+ (progressMgr.getProcessIndicator && stdErrProgress ? progressMgr.getProcessIndicator() : '')
 		);
 	};
 } else {
 	writeLog = function(col, type, msg) {
+		var outMsg = scrubPassword(msg.toString());
 		process.stderr.write(
-			clrRow + logTimestamp('') + type + ' ' + msg.toString() + '\n'
+			clrRow + logTimestamp('') + type + ' ' + outMsg + '\n'
 			+ (progressMgr.getProcessIndicator && stdErrProgress ? progressMgr.getProcessIndicator() : '')
 		);
 	};
@@ -1274,10 +1304,14 @@ if(verbosity < 1) {
 			process.removeListener('exit', writeNewline);
 		progressMgr.getProcessIndicator = null;
 		if(err.name == 'UserScriptError') {
-			logger.error('Evaluation failed for parameter `'+err.area+'`: ' + err.message);
+			var errMsg = scrubPassword(err.message);
+			logger.error('Evaluation failed for parameter `'+err.area+'`: ' + errMsg);
 			process.exit(isNode010 ? 8 : 1);
 		} else {
 			logger.error('Unexpected fatal exception encountered, stack trace below');
+			if(err && err.stack) {
+				err.stack = scrubPassword(err.stack);
+			}
 			throw err; // this seems to change the exit code a bit :/
 		}
 	});
