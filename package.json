@@ -24,13 +24,15 @@
   "engines": {
     "node": ">=0.10"
   },
-  "dependencies" : {
-    "async" : "0.2.0 - 2.9999.9999",
-    "yencode" : "1.0.6 - 1.9999.9999"
+  "dependencies": {
+    "@noble/ciphers": "^2.4.0",
+    "@noble/hashes": "^1.8.0",
+    "async": "0.2.0 - 2.9999.9999",
+    "yencode": "1.0.6 - 1.9999.9999"
   },
-  "devDependencies" : {
-    "mocha" : "*",
-    "nexe" : "*"
+  "devDependencies": {
+    "mocha": "*",
+    "nexe": "*"
   },
   "type": "commonjs",
   "pkg": {
