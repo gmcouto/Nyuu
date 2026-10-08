@@ -235,6 +235,52 @@ it('failed unpooled reloadData leaves no stale body state for subsequent reloads
 	assert.equal(p.data.toString('hex'), good.toString('hex'));
 });
 
+it('unpooled releaseData is idempotent across multiple calls', function() {
+	var a = new MultiEncoder('test.bin', 10, 10);
+	a.setHeaders({Subject: 'test sub', From: 'test@example.com'});
+	var p = a.generate(toBuffer('0123456789'));
+	var origHeaderLen = p._headerBufs.length;
+	p.releaseData();
+	assert.equal(p.data, null);
+	assert.equal(p.bufs.length, origHeaderLen);
+	p.releaseData();
+	assert.equal(p.data, null);
+	assert.equal(p.bufs.length, origHeaderLen);
+	p.reloadData(toBuffer('0123456789'));
+	assert.notEqual(p.data, null);
+	assert.notEqual(p.data.toString().indexOf('Subject: test sub'), -1);
+});
+
+it('unpooled getHeader and stripHeader work after releaseData', function() {
+	var a = new MultiEncoder('test.bin', 10, 10);
+	a.setHeaders({Subject: 'my-subject', 'X-Custom': 'custom-val'});
+	var p = a.generate(toBuffer('0123456789'));
+	p.releaseData();
+	assert.equal(p.getHeader('subject'), 'my-subject');
+	assert.equal(p.getHeader('x-custom'), 'custom-val');
+	assert.equal(p.stripHeader('nonexistent'), false);
+	assert.equal(p.stripHeader('x-custom'), true);
+	assert.equal(p.getHeader('x-custom'), false);
+	p.reloadData(toBuffer('0123456789'));
+	assert.equal(p.data.toString().indexOf('X-Custom'), -1);
+	assert.notEqual(p.data.toString().indexOf('Subject: my-subject'), -1);
+});
+
+it('randomizeMessageID updates _headerBufs so reloadData does not revert message ID', function() {
+	var a = new MultiEncoder('test.bin', 10, 10);
+	a.setHeaders({Subject: 'id test'});
+	var p = a.generate(toBuffer('0123456789'));
+	var origId = p.messageId;
+	var newId = p.randomizeMessageID();
+	assert.notEqual(newId, origId);
+	assert.equal(p.messageId, newId);
+	p.releaseData();
+	p.reloadData(toBuffer('0123456789'));
+	assert.equal(p.messageId, newId);
+	assert.notEqual(p.data.toString().indexOf('Message-ID: <' + newId + '>'), -1);
+	assert.equal(p.data.toString().indexOf('Message-ID: <' + origId + '>'), -1);
+});
+
 it('empty file test', function(done) {
 	var a = new MultiEncoder('file', 0, 1);
 	assert.equal(a.parts, 1);
