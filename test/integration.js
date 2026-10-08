@@ -97,4 +97,30 @@ describe('Encrypted upload pipeline', function() {
 		assert.match(xml, /meta type="password">test123/);
 		assert.doesNotMatch(xml, /segmentIndex/);
 	});
+
+	it('sets encryption metadata when opts.nzb is a factory function', function(done) {
+		var fileuploader = require('../lib/fileuploader');
+		var createdNzbOpts = null;
+		var nzbFactory = function() {
+			createdNzbOpts = {
+				writeTo: function() {},
+				metaData: {}
+			};
+			return ['custom_nzb', createdNzbOpts];
+		};
+		var opts = {
+			encryptionPassword: 'secretpassword',
+			nzb: nzbFactory
+		};
+		fileuploader.upload([], opts, function() {
+			assert.equal(typeof opts.nzb, 'function');
+			assert.equal(opts.nzb.metaData.yenc_encrypted, 'true');
+			assert.equal(opts.nzb.metaData.password, 'secretpassword');
+			var res = opts.nzb('arg1', 'arg2');
+			assert.ok(res);
+			assert.equal(res[1].metaData.yenc_encrypted, 'true');
+			assert.equal(res[1].metaData.password, 'secretpassword');
+			done();
+		});
+	});
 });
