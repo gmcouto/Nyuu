@@ -181,6 +181,18 @@ describe('yEnc encryption crypto', function() {
 		assert(cryptoCore.hasForbiddenSegmentIndexByte(0x000D0000));
 	});
 
+	it('rejects forbidden delimiter bytes in segmentIndex when encrypting Line 1', function() {
+		var masterKey = Buffer.alloc(32, 1);
+		var validSalt = Buffer.alloc(16, 1);
+		var line = Buffer.from('=ybegin part=1 total=1 line=128 size=1000 name=test.bin');
+		assert.throws(function() {
+			ff1.encryptControlLine(line, masterKey, 10, 1, validSalt);
+		}, /forbidden delimiter bytes/);
+		assert.throws(function() {
+			ff1.encryptControlLine(line, masterKey, 266, 1, validSalt);
+		}, /forbidden delimiter bytes/);
+	});
+
 	it('exhausts segmentIndex space with an error instead of wrapping to zero', function() {
 		assert.throws(function() {
 			cryptoCore.nextSafeSegmentIndex(0xFFFFFFFF);
