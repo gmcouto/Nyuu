@@ -109,6 +109,7 @@ describe('Encrypted upload pipeline', function() {
 			return ['custom_nzb', createdNzbOpts];
 		};
 		var opts = {
+			encryptionEnabled: true,
 			encryptionPassword: 'secretpassword',
 			nzb: nzbFactory
 		};

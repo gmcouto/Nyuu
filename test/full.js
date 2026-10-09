@@ -514,5 +514,8 @@ it('complex test', function(done) {
 	});
 });
 
+after(function() {
+	try { require('fs').unlinkSync('output.nzb'); } catch(e) {}
+});
 
 });
