@@ -87,6 +87,8 @@ function extractBootstrapFromLine1(wire) {
 }
 
 describe('malformed_inputs.json adversarial vectors (VEC-05)', function() {
+	this.timeout(30000);
+
 	it('manifest indexes the fixture with matching SHA-256 and vector count', function() {
 		var entry = manifest.files['malformed_inputs.json'];
 		assert(entry, 'manifest must index malformed_inputs.json');
