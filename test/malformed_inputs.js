@@ -70,20 +70,19 @@ function extractBootstrapFromLine1(wire) {
 	var segmentIndex = wire.readUInt32BE(16);
 	if(salt.some(function(b) { return b === 0 || b === 10 || b === 13; }))
 		throw new Error('INVALID_SALT_CHARACTER');
-	// CR-02: uint32_be(segmentIndex) bytes 0x0A/0x0D would split Line 1 on the
-	// wire; rejected under PROVIDER_FAILOVER like the canonical grammar validator
-	if([0, 10, 13].some(function(byte) {
-		return segmentIndex === byte ||
-			((segmentIndex >>> 8) & 0xFF) === byte ||
-			((segmentIndex >>> 16) & 0xFF) === byte ||
-			((segmentIndex >>> 24) & 0xFF) === byte;
-	})) {
-		if(segmentIndex === 0)
-			throw new Error('ZERO_SEGMENT_INDEX');
-		throw new Error('FORBIDDEN_SEGMENT_INDEX_BYTE');
-	}
 	if(segmentIndex === 0)
 		throw new Error('ZERO_SEGMENT_INDEX');
+	// CR-02: uint32_be(segmentIndex) bytes 0x0A/0x0D would split Line 1 on the
+	// wire; rejected under PROVIDER_FAILOVER like the canonical grammar validator
+	var b0 = (segmentIndex >>> 24) & 0xFF;
+	var b1 = (segmentIndex >>> 16) & 0xFF;
+	var b2 = (segmentIndex >>> 8) & 0xFF;
+	var b3 = segmentIndex & 0xFF;
+	if([10, 13].some(function(byte) {
+		return b0 === byte || b1 === byte || b2 === byte || b3 === byte;
+	})) {
+		throw new Error('FORBIDDEN_SEGMENT_INDEX_BYTE');
+	}
 	return {salt: salt, segmentIndex: segmentIndex};
 }
 

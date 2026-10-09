@@ -1063,6 +1063,7 @@ if(argv.encrypt || argv['encrypt-password'] !== undefined) {
 	var encPass = argv['encrypt-password'] !== undefined ? argv['encrypt-password'] : ulOpts.encryptionPassword;
 	if(!encPass)
 		error('`--encrypt-password` is required when encryption is enabled');
+	ulOpts.encryptionEnabled = true;
 	ulOpts.encryptionPassword = encPass;
 }
 
