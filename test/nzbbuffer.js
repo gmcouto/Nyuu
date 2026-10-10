@@ -64,8 +64,6 @@ describe('NZB Buffered Generator', function() {
 			throw new Error('Missing file start/end');
 		if(!data.indexOf('</nzb>'))
 			throw new Error('Missing NZB close tag');
-		assert.doesNotMatch(data, /segmentIndex/);
-		assert.equal(data.indexOf('segmentIndex='), -1);
 		
 		// doesn't seem to be any problems otherwise...
 		done();

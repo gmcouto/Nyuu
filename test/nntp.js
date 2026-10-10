@@ -358,7 +358,7 @@ it('should handle basic tasks', function(done) {
 	], done);
 });
 
-// RFC 3977 §3.1.1 dot-stuffing regression tests (Phase 58 Task 9 / T-58-12):
+// RFC 3977 §3.1.1 dot-stuffing regression tests:
 // article lines starting with '.' (e.g. an encrypted Line 1 bootstrap whose salt
 // byte is 0x2E) must be stuffed before hitting the wire.
 it('should dot-stuff article lines starting with a dot (RFC 3977 §3.1.1)', function(done) {

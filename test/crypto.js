@@ -181,8 +181,8 @@ describe('yEnc encryption crypto', function() {
 		assert.throws(function() { ff1.encryptControlLine(line, masterKey, 4294967296, 1, validSalt); }, /1 to 4294967295/);
 	});
 
-	it('skips CR-02 forbidden segmentIndex bytes when allocating indices', function() {
-		// CR-02: uint32_be(segmentIndex) bytes 0x0A/0x0D would split Line 1 on the wire.
+	it('skips index-framing-rule forbidden segmentIndex bytes when allocating indices', function() {
+		// Index framing rule: uint32_be(segmentIndex) bytes 0x0A/0x0D would split Line 1 on the wire.
 		// assign-and-advance semantics: counter initialized at 0, first article gets 1.
 		assert.equal(cryptoCore.nextSafeSegmentIndex(0), 1, 'first article receives index 1');
 

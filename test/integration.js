@@ -64,10 +64,14 @@ describe('Encrypted upload pipeline', function() {
 		}
 		assert.equal(lines[2].toString('hex'), encryptedYencLine.toString('hex'));
 
-		// 4. NZB metadata and clean segment assertions
+		// 4. NZB metadata and plain NZB 1.1 segment assertions
 		assert.match(xml, /meta type="yenc_encrypted">true/);
 		assert.match(xml, /meta type="password">test123/);
-		assert.doesNotMatch(xml, /segmentIndex/);
+		var segmentTags = xml.match(/<segment [^>]*>/g) || [];
+		assert.equal(segmentTags.length, 1);
+		segmentTags.forEach(function(tag) {
+			assert.match(tag, /^<segment bytes="\d+" number="\d+">$/);
+		});
 	});
 
 	it('rejects body-only encryption attempts (combined-only wire mode)', function() {

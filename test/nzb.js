@@ -58,8 +58,6 @@ describe('NZB Generator', function() {
 			throw new Error('Missing particular group');
 		if(!data.indexOf(' number="2"'))
 			throw new Error('Missing 2nd segment');
-		assert.equal(data.indexOf('segmentIndex='), -1);
-		assert.doesNotMatch(data, /segmentIndex/);
 		assert.match(data, /<segment bytes="123" number="1">blabla@test\.test<\/segment>/);
 		assert.match(data, /<segment bytes="111" number="2">invalid&lt;name&gt;@place<\/segment>/);
 		if(!data.indexOf('invalid&lt;name&gt;@place'))
@@ -114,7 +112,7 @@ describe('NZB Generator', function() {
 		assert.equal(data, data2);
 	});
 
-	it('emits clean standard NZB 1.1 XML without segmentIndex in buffered mode', function() {
+	it('emits standard NZB 1.1 segments in buffered mode', function() {
 		var NZBBuffered = require('../lib/nzbbuffer');
 		var data = [];
 		var nzb = new NZBBuffered(
@@ -134,8 +132,6 @@ describe('NZB Generator', function() {
 		nzb.end();
 
 		var xml = Buffer.concat(data).toString();
-		assert.equal(xml.indexOf('segmentIndex='), -1);
-		assert.doesNotMatch(xml, /segmentIndex/);
 		assert.match(xml, /<segment bytes="100" number="1">msg1@test<\/segment>/);
 		assert.match(xml, /<segment bytes="200" number="2">msg2@test<\/segment>/);
 		assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);

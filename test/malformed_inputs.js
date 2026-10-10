@@ -49,7 +49,7 @@ function parseYencryptionLine(line) {
 		throw new Error(/^[0-9a-fA-F]{32}$/.test(tagHex) ? 'UPPERCASE_HEX' : 'INVALID_TAG_HEX');
 	if(parseInt(indexHex, 16) === 0)
 		throw new Error('ZERO_SEGMENT_INDEX');
-	// CR-02: forbidden bytes in uint32_be(segmentIndex)
+	// Index framing rule: forbidden bytes in uint32_be(segmentIndex)
 	var idx = parseInt(indexHex, 16);
 	if([idx & 0xFF, (idx >>> 8) & 0xFF, (idx >>> 16) & 0xFF, (idx >>> 24) & 0xFF].some(function(b) {
 		return b === 0x0A || b === 0x0D;
@@ -67,7 +67,7 @@ function extractBootstrapFromLine1(wire) {
 		throw new Error('INVALID_SALT_CHARACTER');
 	if(segmentIndex === 0)
 		throw new Error('ZERO_SEGMENT_INDEX');
-	// CR-02: uint32_be(segmentIndex) bytes 0x0A/0x0D would split Line 1 on the
+	// Index framing rule: uint32_be(segmentIndex) bytes 0x0A/0x0D would split Line 1 on the
 	// wire; rejected under PROVIDER_FAILOVER like the canonical grammar validator
 	var b0 = (segmentIndex >>> 24) & 0xFF;
 	var b1 = (segmentIndex >>> 16) & 0xFF;
