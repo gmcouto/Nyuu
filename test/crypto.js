@@ -7,10 +7,24 @@ var cryptoCore = require('../lib/crypto');
 var ff1 = require('../lib/ff1');
 
 var vectorsDir = path.resolve(__dirname, 'test-vectors');
+var fs = require('fs');
+var manifest = JSON.parse(fs.readFileSync(path.join(vectorsDir, 'manifest.json'), 'utf8'));
 var argonVectors = require(path.join(vectorsDir, 'argon2id.json'));
 var nonceVectors = require(path.join(vectorsDir, 'nonce_tweak.json'));
 var bodyVectors = require(path.join(vectorsDir, 'body_encryption.json'));
 var controlVectors = require(path.join(vectorsDir, 'control_line_encryption.json'));
+
+// the canonical fixture set pinned by manifest.json (byte-identical copies of
+// the reference standards repository's vectors)
+var VECTOR_FILES = [
+	'argon2id.json',
+	'body_encryption.json',
+	'control_line_encryption.json',
+	'index_allocation.json',
+	'malformed_inputs.json',
+	'nonce_tweak.json',
+	'nzb_segment_identity.json'
+];
 
 function hex(value) {
 	return Buffer.from(value).toString('hex');
@@ -18,6 +32,23 @@ function hex(value) {
 
 describe('yEnc encryption crypto', function() {
 	this.timeout(30000);
+
+	it('manifest sha256 sync: every vendored fixture matches its pinned hash', function() {
+		assert.equal(manifest.standard_version, '1.2', 'fixture set must be v1.2');
+		assert.deepEqual(
+			Object.keys(manifest.files).sort(),
+			VECTOR_FILES.slice().sort(),
+			'manifest must list exactly the canonical 7 vector files'
+		);
+		VECTOR_FILES.forEach(function(file) {
+			var expected = manifest.files[file].sha256;
+			assert.ok(expected, 'manifest entry missing sha256 for ' + file);
+			var hash = require('crypto').createHash('sha256')
+				.update(fs.readFileSync(path.join(vectorsDir, file)))
+				.digest('hex');
+			assert.equal(hash, expected, 'sha256 drift for ' + file);
+		});
+	});
 
 	it('matches every canonical Argon2id vector', async function() {
 		for(var i = 0; i < argonVectors.vectors.length; i++) {

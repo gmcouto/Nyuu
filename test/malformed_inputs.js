@@ -19,6 +19,7 @@ var validSalt = Buffer.from('1a2b3c4d5e6f7890abcdef1234567890', 'hex');
 
 // mirrors the canonical v1.2 strict =yencryption header grammar validator
 // (yenc-encryption-standards/scripts/test_conformance_vectors.py:parse_yencryption_line_v11)
+// (canonicalLineFor helper removed alongside the controlLines:false wire test)
 function parseYencryptionLine(line) {
 	if(line !== line.trim())
 		throw new Error('INVALID_WHITESPACE');
@@ -55,12 +56,6 @@ function parseYencryptionLine(line) {
 	}))
 		throw new Error('FORBIDDEN_SEGMENT_INDEX_BYTE');
 	return {salt: Buffer.from(saltHex, 'hex'), segmentIndex: idx, tag: Buffer.from(tagHex, 'hex')};
-}
-
-function canonicalLineFor(salt, segmentIndex, tag) {
-	return '=yencryption cipher=XChaCha20-Poly1305 salt=' + salt.toString('hex') +
-		' index=' + segmentIndex.toString(16).padStart(8, '0') +
-		' tag=' + tag.toString('hex');
 }
 
 function extractBootstrapFromLine1(wire) {
@@ -109,21 +104,16 @@ describe('malformed_inputs.json adversarial vectors (VEC-05)', function() {
 
 	it('Nyuu wire output conforms to the canonical grammar (no malformed header patterns)', function() {
 		var ArticleEncoder = require('../lib/article');
-		// 1. With controlLines: false, the =yencryption header is visible in plaintext
-		var encoderNoControl = new ArticleEncoder('file.bin', 5, 5, null, {
-			encryption: {bodyKey: masterKey, masterKey: masterKey, salt: validSalt, controlLines: false, segmentIndex: 1}
-		});
-		encoderNoControl.setHeaders({}, '', '');
-		var postNoControl = encoderNoControl.generate(Buffer.from('hello'));
-		var wire = postNoControl.data.toString('binary');
-		var m = wire.match(/=yencryption[^\r\n]*/);
-		assert(m, 'article must contain plaintext =yencryption line when controlLines: false');
-		var parsed = parseYencryptionLine(m[0]);
-		assert.equal(parsed.salt.toString('hex'), validSalt.toString('hex'));
-		assert.equal(parsed.segmentIndex, postNoControl.segmentIndex);
-		assert.equal(m[0], canonicalLineFor(validSalt, postNoControl.segmentIndex, postNoControl.encryptionResult.tag));
+		// v1 wire mode is combined-only: controlLines:false must be rejected outright
+		assert.throws(function() {
+			var encoderNoControl = new ArticleEncoder('file.bin', 5, 5, null, {
+				encryption: {bodyKey: masterKey, masterKey: masterKey, salt: validSalt, controlLines: false, segmentIndex: 1}
+			});
+			encoderNoControl.setHeaders({}, '', '');
+			encoderNoControl.generate(Buffer.from('hello'));
+		}, /Combined-only wire mode/);
 
-		// 2. With controlLines: true, plaintext is hidden from the wire
+		// combined mode hides the =yencryption header from the wire
 		var encoderEncControl = new ArticleEncoder('file.bin', 5, 5, null, {
 			encryption: {bodyKey: masterKey, masterKey: masterKey, salt: validSalt, controlLines: true, segmentIndex: 1}
 		});

@@ -27,8 +27,8 @@ describe('NZB Generator', function() {
 			['alt.binaries.test', 'tildes suck&&&&', '"made up group"'],
 			null
 		);
-		nzb.addSegment(123, 'blabla@test.test', 1);
-		nzb.addSegment(111, 'invalid<name>@place', 2);
+		nzb.addSegment(123, 'blabla@test.test');
+		nzb.addSegment(111, 'invalid<name>@place');
 		nzb.file(
 			'Silly&File',
 			'A <Poster>',
@@ -95,8 +95,8 @@ describe('NZB Generator', function() {
 			['alt.binaries.test', 'tildes suck&&&&', '"made up group"'],
 			null,
 			[
-				[123, 'blabla@test.test', 1],
-				[111, 'invalid<name>@place', 2]
+				[123, 'blabla@test.test'],
+				[111, 'invalid<name>@place']
 			]
 		);
 		nzb.wholeFile(
@@ -129,8 +129,8 @@ describe('NZB Generator', function() {
 			'utf8'
 		);
 		var file = nzb.file('test.bin', 'poster', ['alt.binaries.test'], 2, null);
-		file.set(0, 100, 'msg1@test', 1);
-		file.set(1, 200, 'msg2@test', 2);
+		file.set(0, 100, 'msg1@test');
+		file.set(1, 200, 'msg2@test');
 		nzb.end();
 
 		var xml = Buffer.concat(data).toString();

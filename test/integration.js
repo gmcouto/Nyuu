@@ -28,7 +28,7 @@ describe('Encrypted upload pipeline', function() {
 		encoder.setHeaders({}, '', '');
 		var post = encoder.generate(Buffer.from('hello'));
 		nzb.file('file.bin (1/1)', 'poster', ['alt.test'], 1);
-		nzb.addSegment(post.postLen, 'article@example.com', post.segmentIndex);
+		nzb.addSegment(post.postLen, 'article@example.com');
 		nzb.end();
 
 		var wire = post.data.toString('binary');
@@ -70,32 +70,30 @@ describe('Encrypted upload pipeline', function() {
 		assert.doesNotMatch(xml, /segmentIndex/);
 	});
 
-	it('keeps segment identity and encryption metadata aligned when control lines encryption is disabled', function() {
-		var output = [];
-		var nzb = new NZBGenerator({yenc_encrypted: 'true', password: 'test123'}, function(value, encoding) {
-			output.push(Buffer.from(value, encoding));
-		}, true, 'utf8');
-		var encoder = new ArticleEncoder('file.bin', 5, 5, null, {
-			encryption: {
-				bodyKey: Buffer.alloc(32, 7),
-				masterKey: Buffer.alloc(32, 7),
-				salt: Buffer.from('0102030405060708090b0c0e0f101112', 'hex'),
-				controlLines: false,
-				segmentIndex: 1
-			}
-		});
+	it('rejects body-only encryption attempts (combined-only wire mode)', function() {
+		// v1 exposes only the combined wire mode: controlLines:false must be
+		// rejected at generation time by the ArticleEncoder itself
+		var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+		var encOpts = {
+			bodyKey: Buffer.alloc(32, 7),
+			masterKey: Buffer.alloc(32, 7),
+			salt: salt,
+			controlLines: false,
+			segmentIndex: 1
+		};
+		assert.throws(function() {
+			var encoder = new ArticleEncoder('file.bin', 5, 5, null, {encryption: Object.assign({}, encOpts)});
+			encoder.setHeaders({}, '', '');
+			encoder.generate(Buffer.from('hello'));
+		}, /Combined-only wire mode/);
+
+		var encoder = new ArticleEncoder('file.bin', 5, 5, null, {encryption: Object.assign({}, encOpts, {controlLines: true})});
 		encoder.setHeaders({}, '', '');
-		var post = encoder.generate(Buffer.from('hello'));
-		nzb.file('file.bin (1/1)', 'poster', ['alt.test'], 1);
-		nzb.addSegment(post.postLen, 'article@example.com', post.segmentIndex);
-		nzb.end();
-		var wire = post.data.toString('ascii');
-		var xml = Buffer.concat(output).toString('utf8');
-		assert.match(wire, /=yencryption cipher=XChaCha20-Poly1305 salt=[0-9a-f]{32} index=[0-9a-f]{8} tag=[0-9a-f]{32}/);
-		assert.doesNotMatch(wire, /hello/);
-		assert.match(xml, /meta type="yenc_encrypted">true/);
-		assert.match(xml, /meta type="password">test123/);
-		assert.doesNotMatch(xml, /segmentIndex/);
+		assert.throws(function() {
+			// a runtime flip of the flag must not leak a plaintext =yencryption line either
+			encoder.encryption.controlLines = false;
+			encoder.generate(Buffer.from('hello'));
+		}, /Combined-only wire mode/);
 	});
 
 	it('sets encryption metadata when opts.nzb is a factory function', function(done) {
@@ -123,5 +121,61 @@ describe('Encrypted upload pipeline', function() {
 			assert.equal(res[1].metaData.password, 'secretpassword');
 			done();
 		});
+	});
+});
+
+describe('Encrypted single-file subject prefix', function() {
+	// the [N/M] prefix is required whenever encryption is used, even for
+	// single-file posts (the NZB subject identifies the release as encrypted)
+	function runSingleFileUpload(opts, checkSubject, cb) {
+		var UploadManager = require('../lib/uploadmgr');
+		var um = new UploadManager(Object.assign({useBufferPool: false, servers: []}, opts), function() {});
+		var file = {num: 1, name: 'singlefile.mkv', size: 50, collection: 'c1'};
+		var readCalled = false;
+		var fakeStream = {
+			read: function(size, cbRead) {
+				if(readCalled) {
+					cbRead(null, Buffer.alloc(0));
+				} else {
+					readCalled = true;
+					cbRead(null, Buffer.alloc(50, 0x5a));
+				}
+			}
+		};
+		um.uploader.addPost = function(post, cbNext, cbDone) {
+			checkSubject(post._getHeadersStr());
+			cbNext();
+			cbDone(null);
+		};
+		um.addFile(file, 1, {Subject: null}, fakeStream, function(err) {
+			assert.ifError(err);
+			cb();
+		});
+	}
+
+	it('sets [1/1] - subject prefix for a single-file encrypted upload', function(done) {
+		var cryptoCore = require('../lib/crypto');
+		var salt = cryptoCore.generateEncryptionSalt();
+		cryptoCore.deriveKeys('test123', salt).then(function(keys) {
+			runSingleFileUpload({
+				encryption: {
+					bodyKey: keys.bodyKey,
+					controlKey: keys.controlKey,
+					masterKey: keys.masterKey,
+					salt: salt,
+					controlLines: true
+				}
+			}, function(headers) {
+				assert.match(headers, /Subject: \[1\/1\] - "singlefile\.mkv" yEnc \(1\/1\) 50/,
+					'Subject must have [1/1] - prefix when encryption is active: ' + headers);
+			}, done);
+		}).catch(done);
+	});
+
+	it('does not set [1/1] - subject prefix for a single-file unencrypted upload', function(done) {
+		runSingleFileUpload({}, function(headers) {
+			assert.match(headers, /Subject: "singlefile\.mkv" yEnc \(1\/1\) 50/,
+				'unencrypted single file must not have [1/1] - prefix: ' + headers);
+		}, done);
 	});
 });

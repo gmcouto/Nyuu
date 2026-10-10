@@ -118,44 +118,38 @@ it('encrypts body and control lines before yEnc encoding', function() {
 	assert.ok(post.postLen > post.postPos);
 });
 
-it('emits canonical 5-token =yencryption line when controlLines is false', function() {
+it('rejects controlLines:false as contrary to the combined-only wire mode', function() {
 	var key = Buffer.alloc(32, 7);
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
 	[null, new BufferPool(4096)].forEach(function(pool) {
-		var a = new MultiEncoder('file', 6, 6, null, {
-			encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: false, segmentIndex: 1}
-		});
-		a.setHeaders({});
-		var post = a.generate(toBuffer('secret'), pool);
-		var wire = post.data.toString('ascii');
-		assert.match(wire, /=yencryption cipher=XChaCha20-Poly1305 salt=[0-9a-f]{32} index=[0-9a-f]{8} tag=[0-9a-f]{32}/);
-		var m = wire.match(/=yencryption cipher=XChaCha20-Poly1305 salt=([0-9a-f]{32}) index=([0-9a-f]{8}) tag=([0-9a-f]{32})/);
-		assert.equal(m[1], salt.toString('hex'));
-		assert.equal(m[2], '00000001');
-		assert.equal(m[3], post.encryption.tag.toString('hex'));
+		assert.throws(function() {
+			var a = new MultiEncoder('file', 6, 6, null, {
+				encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: false, segmentIndex: 1}
+			});
+			a.setHeaders({});
+			a.generate(toBuffer('secret'), pool);
+		}, /Combined-only wire mode/);
 	});
 });
 
 it('re-encrypts plaintext on reloadData without length mismatch or plaintext leak', function() {
 	var key = Buffer.alloc(32, 7);
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
-	[true, false].forEach(function(controlLines) {
-		[null, new BufferPool(4096)].forEach(function(pool) {
-			var a = new MultiEncoder('file', 500, 500, null, {
-				encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: controlLines, segmentIndex: 1}
-			});
-			a.setHeaders({});
-			var plain = Buffer.alloc(500, 0);
-			var post = a.generate(plain, pool);
-			var oldData = Buffer.from(post.data);
-			var oldTag = Buffer.from(post.encryption.tag);
-			post.releaseData();
-			assert.equal(post.data, null);
-			post.reloadData(plain);
-			assert.ok(post.data);
-			assert.equal(oldData.toString('hex'), post.data.toString('hex'));
-			assert.equal(oldTag.toString('hex'), post.encryption.tag.toString('hex'));
+	[null, new BufferPool(4096)].forEach(function(pool) {
+		var a = new MultiEncoder('file', 500, 500, null, {
+			encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
 		});
+		a.setHeaders({});
+		var plain = Buffer.alloc(500, 0);
+		var post = a.generate(plain, pool);
+		var oldData = Buffer.from(post.data);
+		var oldTag = Buffer.from(post.encryption.tag);
+		post.releaseData();
+		assert.equal(post.data, null);
+		post.reloadData(plain);
+		assert.ok(post.data);
+		assert.equal(oldData.toString('hex'), post.data.toString('hex'));
+		assert.equal(oldTag.toString('hex'), post.encryption.tag.toString('hex'));
 	});
 });
 
@@ -164,7 +158,7 @@ it('pooled post grows undersized pooled buffer on reloadData instead of silently
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
 	// build an oversized post once to learn its exact wire length
 	var a = new MultiEncoder('f', 600, 600, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: false, segmentIndex: 1}
+		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
 	});
 	a.setHeaders({});
 	var reference = a.generate(Buffer.alloc(600));
@@ -175,7 +169,7 @@ it('pooled post grows undersized pooled buffer on reloadData instead of silently
 	var tinyPool = new BufferPool(expectedLen - 100);
 	tinyPool.put(Buffer.alloc(expectedLen - 100));
 	var a2 = new MultiEncoder('f', 600, 600, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: false, segmentIndex: 1}
+		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
 	});
 	a2.setHeaders({});
 	var post = a2.generate(Buffer.alloc(600), tinyPool);
@@ -188,8 +182,8 @@ it('pooled post grows undersized pooled buffer on reloadData instead of silently
 	assert.equal(post.data.toString('hex'), goodData.toString('hex'));
 	// the full body must be intact: final yend terminator present at the very end
 	assert(post.data.toString('ascii').endsWith('\r\n.\r\n'));
-	// the =yencryption header line is present and atomic (controlLines: false path)
-	assert.match(post.data.toString('ascii'), /=yencryption cipher=XChaCha20-Poly1305 salt=[0-9a-f]{32} index=[0-9a-f]{8} tag=[0-9a-f]{32}\r\n/);
+	// control lines are encrypted: no plaintext =yencryption header on the wire
+	assert.doesNotMatch(post.data.toString('ascii'), /=yencryption/);
 });
 
 it('pooled post survives undersized pool buffer with control-line encryption', function() {

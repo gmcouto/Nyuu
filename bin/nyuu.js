@@ -1243,18 +1243,28 @@ var writeNewline = function() {
 	process.stderr.write('\n');
 };
 var clrRow = stdErrProgress ? '\x1b[0G\x1B[0K' : '';
+// secrets must never reach the log: scrub the encryption password from every line
+var scrubPassword = function(str) {
+	var pw = argv['encrypt-password'] !== undefined ? argv['encrypt-password'] : ulOpts.encryptionPassword;
+	if(pw && typeof str === 'string' && str.indexOf(pw) !== -1) {
+		return str.split(pw).join('[SCRUBBED]');
+	}
+	return str;
+};
 var writeLog;
 if(argv.colorize) {
 	writeLog = function(col, type, msg) {
+		var outMsg = scrubPassword(msg.toString());
 		process.stderr.write(
-			clrRow + '\x1B['+col+'m' + logTimestamp('') + type + '\x1B[39m ' + msg.toString() + '\n'
+			clrRow + '\x1B['+col+'m' + logTimestamp('') + type + '\x1B[39m ' + outMsg + '\n'
 			+ (progressMgr.getProcessIndicator && stdErrProgress ? progressMgr.getProcessIndicator() : '')
 		);
 	};
 } else {
 	writeLog = function(col, type, msg) {
+		var outMsg = scrubPassword(msg.toString());
 		process.stderr.write(
-			clrRow + logTimestamp('') + type + ' ' + msg.toString() + '\n'
+			clrRow + logTimestamp('') + type + ' ' + outMsg + '\n'
 			+ (progressMgr.getProcessIndicator && stdErrProgress ? progressMgr.getProcessIndicator() : '')
 		);
 	};
