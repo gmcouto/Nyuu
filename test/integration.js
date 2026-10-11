@@ -21,7 +21,6 @@ describe('Encrypted upload pipeline', function() {
 				bodyKey: bodyKey,
 				masterKey: masterKey,
 				salt: salt,
-				controlLines: true,
 				segmentIndex: segmentIndex
 			}
 		});
@@ -75,29 +74,23 @@ describe('Encrypted upload pipeline', function() {
 	});
 
 	it('rejects body-only encryption attempts (combined-only wire mode)', function() {
-		// v1 exposes only the combined wire mode: controlLines:false must be
-		// rejected at generation time by the ArticleEncoder itself
+		// v1 exposes only the combined wire mode: control-line encryption is
+		// always applied when encryption is enabled
 		var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
 		var encOpts = {
 			bodyKey: Buffer.alloc(32, 7),
 			masterKey: Buffer.alloc(32, 7),
 			salt: salt,
-			controlLines: false,
 			segmentIndex: 1
 		};
-		assert.throws(function() {
-			var encoder = new ArticleEncoder('file.bin', 5, 5, null, {encryption: Object.assign({}, encOpts)});
-			encoder.setHeaders({}, '', '');
-			encoder.generate(Buffer.from('hello'));
-		}, /Combined-only wire mode/);
-
-		var encoder = new ArticleEncoder('file.bin', 5, 5, null, {encryption: Object.assign({}, encOpts, {controlLines: true})});
+		var encoder = new ArticleEncoder('file.bin', 5, 5, null, {encryption: Object.assign({}, encOpts)});
 		encoder.setHeaders({}, '', '');
-		assert.throws(function() {
-			// a runtime flip of the flag must not leak a plaintext =yencryption line either
-			encoder.encryption.controlLines = false;
-			encoder.generate(Buffer.from('hello'));
-		}, /Combined-only wire mode/);
+		var post = encoder.generate(Buffer.from('hello'));
+		// both control lines and body must be encrypted: no plaintext on the wire
+		var wire = post.data.toString('binary');
+		assert.ok(wire.indexOf('=ybegin') < 0);
+		assert.ok(wire.indexOf('=yencryption') < 0);
+		assert.ok(wire.indexOf('hello') < 0);
 	});
 
 	it('sets encryption metadata when opts.nzb is a factory function', function(done) {
@@ -164,10 +157,8 @@ describe('Encrypted single-file subject prefix', function() {
 			runSingleFileUpload({
 				encryption: {
 					bodyKey: keys.bodyKey,
-					controlKey: keys.controlKey,
 					masterKey: keys.masterKey,
-					salt: salt,
-					controlLines: true
+					salt: salt
 				}
 			}, function(headers) {
 				assert.match(headers, /Subject: \[1\/1\] - "singlefile\.mkv" yEnc \(1\/1\) 50/,

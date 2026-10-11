@@ -720,8 +720,6 @@ try {
 } catch(x) {
 	error(x.message);
 }
-var cliExplicitNoEncrypt = argv.encrypt === false;
-var cliHasEncryptPass = argv['encrypt-password'] !== undefined;
 var isNode010 = process.version.match(/^v0\.10\./);
 
 var dumpObj = function(o) {
@@ -1061,9 +1059,9 @@ if('filename' in argv)
 
 // map custom meta tags
 if(argv.meta) util.extend(ulOpts.nzb.metaData, argv.meta);
-if(cliExplicitNoEncrypt || argv.encrypt === false) {
+if(argv.encrypt === false) {
 	ulOpts.encryptionEnabled = false;
-} else if(argv.encrypt || cliHasEncryptPass) {
+} else if(argv.encrypt || argv['encrypt-password'] !== undefined) {
 	var encPass = argv['encrypt-password'] !== undefined ? argv['encrypt-password'] : ulOpts.encryptionPassword;
 	if(!encPass)
 		error('`--encrypt-password` is required when encryption is enabled');

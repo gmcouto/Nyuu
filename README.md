@@ -307,6 +307,8 @@ Generated NZBs strictly conform to the standard NZB 1.1 DTD without custom
 XML attributes on `<segment>` elements, including only `<meta type="yenc_encrypted">true</meta>`
 and `<meta type="password">` in `<head>`.
 
+Note: Node.js ≥ 16 is required when `--encrypt` is used.
+
 CLI flags:
 - `--encrypt`: Enable yEnc body and control-line encryption (flag option). Encryption is always combined: control lines are encrypted whenever `--encrypt` is active.
 - `--encrypt-password <pass>`: Specify the encryption password (required when encryption is enabled).

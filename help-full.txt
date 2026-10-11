@@ -347,7 +347,7 @@ NZB Output Options:
        --nzb-poster          Override the poster specified in the NZB, which,
                              is taken from the From header by default. Details
                              are the same as `--nzb-subject` described above.
-                              Default is {value}
+                             Default is {value}
 
 Encryption Options:
 

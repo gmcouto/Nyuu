@@ -19,20 +19,17 @@
   "bin": "bin/nyuu.js",
   "preferGlobal": true,
   "engines": {
-    "node": ">=18"
+    "node": ">=0.10"
   },
-  "scripts": {
-    "test": "mocha test"
-  },
-  "dependencies": {
+  "dependencies" : {
     "@noble/ciphers": "1.3.0",
-    "async": "0.2.0 - 2.9999.9999",
+    "async" : "0.2.0 - 2.9999.9999",
     "hash-wasm": "4.12.0",
-    "yencode": "1.0.6 - 1.9999.9999"
+    "yencode" : "1.0.6 - 1.9999.9999"
   },
-  "devDependencies": {
-    "mocha": "11.7.2",
-    "nexe": "*"
+  "devDependencies" : {
+    "mocha" : "*",
+    "nexe" : "*"
   },
   "type": "commonjs",
   "pkg": {

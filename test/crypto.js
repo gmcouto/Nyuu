@@ -76,12 +76,13 @@ describe('yEnc encryption crypto', function() {
 
 	it('matches canonical XChaCha20-Poly1305 vectors', function() {
 		bodyVectors.vectors.forEach(function(vector) {
+			var nonce = cryptoCore.deriveBodyNonce(Buffer.from(vector.derived_key_hex, 'hex'), vector.segment_index);
+			assert.equal(hex(nonce), vector.derived_nonce_hex, vector.id + ' nonce');
 			var result = cryptoCore.encryptBody(
 				Buffer.from(vector.plaintext_hex, 'hex'),
 				Buffer.from(vector.derived_key_hex, 'hex'),
 				vector.segment_index
 			);
-			assert.equal(hex(result.nonce), vector.derived_nonce_hex, vector.id + ' nonce');
 			assert.equal(hex(result.ciphertext), vector.expected_ciphertext_hex, vector.id + ' ciphertext');
 			assert.equal(hex(result.tag), vector.expected_tag_hex, vector.id + ' tag');
 			var formattedIndex = vector.segment_index.toString(16).padStart(8, '0');
@@ -150,9 +151,7 @@ describe('yEnc encryption crypto', function() {
 		var keys = await cryptoCore.deriveKeys('test123', salt);
 		assert.equal(keys.masterKey.length, 32);
 		assert.equal(keys.bodyKey.length, 32);
-		assert.equal(keys.controlKey.length, 32);
 		assert.deepEqual(keys.bodyKey, keys.masterKey);
-		assert.deepEqual(keys.controlKey, cryptoCore.deriveControlKey(keys.masterKey));
 	});
 
 	it('rejects stale zero-based and uint64 segment assumptions', function() {

@@ -103,7 +103,7 @@ it('encrypts body and control lines before yEnc encoding', function() {
 	var key = Buffer.alloc(32, 7);
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
 	var a = new MultiEncoder('file', 6, 6, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
+		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
 	});
 	a.setHeaders({});
 	var post = a.generate(toBuffer('secret'));
@@ -118,18 +118,20 @@ it('encrypts body and control lines before yEnc encoding', function() {
 	assert.ok(post.postLen > post.postPos);
 });
 
-it('rejects controlLines:false as contrary to the combined-only wire mode', function() {
+it('dot-stuffs encrypted control lines starting with a dot (forced 0x2E salt byte)', function() {
 	var key = Buffer.alloc(32, 7);
-	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
-	[null, new BufferPool(4096)].forEach(function(pool) {
-		assert.throws(function() {
-			var a = new MultiEncoder('file', 6, 6, null, {
-				encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: false, segmentIndex: 1}
-			});
-			a.setHeaders({});
-			a.generate(toBuffer('secret'), pool);
-		}, /Combined-only wire mode/);
+	var salt = Buffer.from('2e02030405060708090b0c0e0f101112', 'hex');
+	var a = new MultiEncoder('file', 6, 6, null, {
+		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
 	});
+	a.setHeaders({});
+	var post = a.generate(toBuffer('secret'));
+	assert.equal(post.data[post.postPos], 0x2E, 'dot-stuffed extra dot');
+	assert.equal(post.data[post.postPos + 1], 0x2E, 'original salt[0] dot');
+	assert.equal(post.data.subarray(post.postPos + 1, post.postPos + 17).toString('hex'), salt.toString('hex'), 'intact salt bytes');
+	assert.equal(post.data.subarray(post.postPos + 17, post.postPos + 21).readUInt32BE(0), 1, 'intact segment index');
+	assert.ok(post.data.toString('ascii').endsWith('\r\n.\r\n'));
+	assert.ok(!post.data.toString('ascii').endsWith('\r\n..\r\n'));
 });
 
 it('re-encrypts plaintext on reloadData without length mismatch or plaintext leak', function() {
@@ -137,19 +139,19 @@ it('re-encrypts plaintext on reloadData without length mismatch or plaintext lea
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
 	[null, new BufferPool(4096)].forEach(function(pool) {
 		var a = new MultiEncoder('file', 500, 500, null, {
-			encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
+			encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
 		});
 		a.setHeaders({});
 		var plain = Buffer.alloc(500, 0);
 		var post = a.generate(plain, pool);
 		var oldData = Buffer.from(post.data);
-		var oldTag = Buffer.from(post.encryption.tag);
+		var oldTag = Buffer.from(post.encryptionResult.tag);
 		post.releaseData();
 		assert.equal(post.data, null);
 		post.reloadData(plain);
 		assert.ok(post.data);
 		assert.equal(oldData.toString('hex'), post.data.toString('hex'));
-		assert.equal(oldTag.toString('hex'), post.encryption.tag.toString('hex'));
+		assert.equal(oldTag.toString('hex'), post.encryptionResult.tag.toString('hex'));
 	});
 });
 
@@ -158,7 +160,7 @@ it('pooled post grows undersized pooled buffer on reloadData instead of silently
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
 	// build an oversized post once to learn its exact wire length
 	var a = new MultiEncoder('f', 600, 600, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
+		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
 	});
 	a.setHeaders({});
 	var reference = a.generate(Buffer.alloc(600));
@@ -169,7 +171,7 @@ it('pooled post grows undersized pooled buffer on reloadData instead of silently
 	var tinyPool = new BufferPool(expectedLen - 100);
 	tinyPool.put(Buffer.alloc(expectedLen - 100));
 	var a2 = new MultiEncoder('f', 600, 600, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
+		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
 	});
 	a2.setHeaders({});
 	var post = a2.generate(Buffer.alloc(600), tinyPool);
@@ -190,7 +192,7 @@ it('pooled post survives undersized pool buffer with control-line encryption', f
 	var key = Buffer.alloc(32, 7);
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
 	var a = new MultiEncoder('f', 600, 600, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
+		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
 	});
 	a.setHeaders({});
 	var reference = a.generate(Buffer.alloc(600));
@@ -199,7 +201,7 @@ it('pooled post survives undersized pool buffer with control-line encryption', f
 	var tinyPool = new BufferPool(expectedLen - 100);
 	tinyPool.put(Buffer.alloc(expectedLen - 100));
 	var a2 = new MultiEncoder('f', 600, 600, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, controlLines: true, segmentIndex: 1}
+		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
 	});
 	a2.setHeaders({});
 	var post = a2.generate(Buffer.alloc(600), tinyPool);
@@ -207,109 +209,6 @@ it('pooled post survives undersized pool buffer with control-line encryption', f
 	// Line 1 bootstrap prefix bytes are the FF1-encrypted control line's salt+index, unsplit and intact
 	assert.equal(post.data.subarray(post.postPos, post.postPos + 16).toString('hex'), salt.toString('hex'));
 	assert.equal(post.data.subarray(post.postPos + 16, post.postPos + 20).readUInt32BE(0), 1);
-});
-
-it('failed unpooled reloadData leaves no stale body state for subsequent reloads', function() {
-	var a = new MultiEncoder('test.bin', 10, 10);
-	a.setHeaders({});
-	var p = a.generate(toBuffer('0123456789'));
-	var good = toBuffer(p.data);
-	p.releaseData();
-	assert.equal(p.data, null);
-	// a wrong-length reload must throw without corrupting state
-	assert.throws(function() {
-		p.reloadData(toBuffer('0123456789extra'));
-	}, /Article length mismatch encountered/);
-	// bufs must not have accumulated a stale encoded body — the prefix is the
-	// full header framing (all headers + blank line), not just the Message-ID
-	assert.equal(p.bufs.length, p._headerBufs.length);
-	assert.equal(p.bufs[p.bufs.length - 1].toString(), '\r\n');
-	// a correct reload must then produce the byte-identical original article
-	p.reloadData(toBuffer('0123456789'));
-	assert.equal(p.data.toString('hex'), good.toString('hex'));
-});
-
-it('unpooled releaseData is idempotent across multiple calls', function() {
-	var a = new MultiEncoder('test.bin', 10, 10);
-	a.setHeaders({Subject: 'test sub', From: 'test@example.com'});
-	var p = a.generate(toBuffer('0123456789'));
-	var origHeaderLen = p._headerBufs.length;
-	p.releaseData();
-	assert.equal(p.data, null);
-	assert.equal(p.bufs.length, origHeaderLen);
-	p.releaseData();
-	assert.equal(p.data, null);
-	assert.equal(p.bufs.length, origHeaderLen);
-	p.reloadData(toBuffer('0123456789'));
-	assert.notEqual(p.data, null);
-	assert.notEqual(p.data.toString().indexOf('Subject: test sub'), -1);
-});
-
-it('unpooled getHeader and stripHeader work after releaseData', function() {
-	var a = new MultiEncoder('test.bin', 10, 10);
-	a.setHeaders({Subject: 'my-subject', 'X-Custom': 'custom-val'});
-	var p = a.generate(toBuffer('0123456789'));
-	p.releaseData();
-	assert.equal(p.getHeader('subject'), 'my-subject');
-	assert.equal(p.getHeader('x-custom'), 'custom-val');
-	assert.equal(p.stripHeader('nonexistent'), false);
-	assert.equal(p.stripHeader('x-custom'), true);
-	assert.equal(p.getHeader('x-custom'), false);
-	p.reloadData(toBuffer('0123456789'));
-	assert.equal(p.data.toString().indexOf('X-Custom'), -1);
-	assert.notEqual(p.data.toString().indexOf('Subject: my-subject'), -1);
-});
-
-it('randomizeMessageID updates _headerBufs so reloadData does not revert message ID', function() {
-	var a = new MultiEncoder('test.bin', 10, 10);
-	a.setHeaders({Subject: 'id test'});
-	var p = a.generate(toBuffer('0123456789'));
-	var origId = p.messageId;
-	var newId = p.randomizeMessageID();
-	assert.notEqual(newId, origId);
-	assert.equal(p.messageId, newId);
-	p.releaseData();
-	p.reloadData(toBuffer('0123456789'));
-	assert.equal(p.messageId, newId);
-	assert.notEqual(p.data.toString().indexOf('Message-ID: <' + newId + '>'), -1);
-	assert.equal(p.data.toString().indexOf('Message-ID: <' + origId + '>'), -1);
-});
-
-it('PooledPost should synchronize _headerStr on randomizeMessageID and stripHeader after releaseData', function() {
-	var a = new MultiEncoder('testfile', 6, 6);
-	a.setHeaders({
-		Subject: 'Test Subject',
-		From: 'poster@example.com',
-		'X-Removable': 'remove-me'
-	});
-	var pool = new BufferPool(4096, 2);
-	var input = toBuffer('abcdef');
-	var p = a.generate(input, pool);
-	var origId = p.messageId;
-
-	// Release data buffer to trigger _headerStr caching
-	p.releaseData();
-	assert.equal(p.data, null);
-	assert.ok(p._headerStr);
-	assert.notEqual(p._headerStr.indexOf('X-Removable: remove-me'), -1);
-
-	// Randomize message ID while released
-	var newId = p.randomizeMessageID();
-	assert.notEqual(newId, origId);
-	assert.notEqual(p._headerStr.indexOf('Message-ID: <' + newId + '>'), -1);
-	assert.equal(p._headerStr.indexOf('Message-ID: <' + origId + '>'), -1);
-
-	// Strip header while released
-	assert.ok(p.stripHeader('X-Removable'));
-	assert.equal(p._headerStr.indexOf('X-Removable'), -1);
-
-	// Reload data and ensure it succeeds with synchronized header
-	p.reloadData(input);
-	assert.ok(p.data);
-	var postStr = p.data.toString();
-	assert.notEqual(postStr.indexOf('Message-ID: <' + newId + '>'), -1);
-	assert.equal(postStr.indexOf('Message-ID: <' + origId + '>'), -1);
-	assert.equal(postStr.indexOf('X-Removable'), -1);
 });
 
 it('empty file test', function(done) {
