@@ -291,31 +291,18 @@ summarized list of options.
 
 ### Encryption (yEnc body & control lines)
 
-Nyuu supports yEnc body and control-line encryption according to the v1.2
-yEnc Body Encryption and yEnc Control Lines Encryption standards. Article bodies are encrypted with
-XChaCha20-Poly1305, and control lines (`=ybegin`, `=ypart`, `=yend`, `=yencryption`)
-are encrypted using Radix 253 NIST SP 800-38G FF1.
-
-Under the v1.2 standards, each posted Usenet article is self-describing
-and embeds its salt and monotonic segment index directly into the wire bytes:
-- A 20-byte bootstrap prefix (`[16-byte raw salt][4-byte uint32_be(segmentIndex)]`)
-  is prepended to physical Line 1 (`=ybegin`) before FF1 ciphertext.
-- A canonical 5-token header (`=yencryption cipher=XChaCha20-Poly1305 salt=<32_hex> index=<8_hex> tag=<32_hex>`)
-  provides dual-bootstrap agreement for downloaders.
-
-Generated NZBs strictly conform to the standard NZB 1.1 DTD without custom
-XML attributes on `<segment>` elements, including only `<meta type="yenc_encrypted">true</meta>`
-and `<meta type="password">` in `<head>`.
-
-Note: Node.js ≥ 16 is required when `--encrypt` is used.
+Nyuu supports experimental yEnc body and control-line encryption (v1.2).
+Article bodies are encrypted with XChaCha20-Poly1305 and control lines
+are encrypted with Radix 253 FF1. Generated NZBs include standard
+`<meta type="yenc_encrypted">true</meta>` and `<meta type="password">` tags.
 
 CLI flags:
-- `--encrypt`: Enable yEnc body and control-line encryption (flag option). Encryption is always combined: control lines are encrypted whenever `--encrypt` is active.
-- `--encrypt-password <pass>`: Specify the encryption password (required when encryption is enabled).
+- `--encrypt`: Enable yEnc body and control-line encryption (combined wire mode).
+- `--encrypt-password <pass>`: Specify the encryption password. Specifying this option enables encryption.
 
 Example:
 ```bash
-nyuu -h news.example.com -S -u user -p pass -o out.nzb --encrypt --encrypt-password "MySecretPassword" file.mkv
+nyuu -h news.example.com -S -u user -p pass -o out.nzb --encrypt-password "MySecretPassword" file.mkv
 ```
 
 Default Configuration

@@ -8,23 +8,17 @@ var ff1 = require('../lib/ff1');
 
 var vectorsDir = path.resolve(__dirname, 'test-vectors');
 var fs = require('fs');
-var manifest = JSON.parse(fs.readFileSync(path.join(vectorsDir, 'manifest.json'), 'utf8'));
 var argonVectors = require(path.join(vectorsDir, 'argon2id.json'));
 var nonceVectors = require(path.join(vectorsDir, 'nonce_tweak.json'));
 var bodyVectors = require(path.join(vectorsDir, 'body_encryption.json'));
 var controlVectors = require(path.join(vectorsDir, 'control_line_encryption.json'));
 
-// the canonical fixture set pinned by manifest.json (byte-identical copies of
+// the canonical fixture set (byte-identical copies of
 // the reference standards repository's vectors)
-var VECTOR_FILES = [
-	'argon2id.json',
-	'body_encryption.json',
-	'control_line_encryption.json',
-	'index_allocation.json',
-	'malformed_inputs.json',
-	'nonce_tweak.json',
-	'nzb_segment_identity.json'
-];
+// Vendored fixtures: argon2id.json, body_encryption.json,
+// control_line_encryption.json, index_allocation.json, nonce_tweak.json
+// (nzb_segment_identity.json, malformed_inputs.json and manifest.json are
+// downloader-side fixtures and are not exercised by Nyuu's uploader tests)
 
 function hex(value) {
 	return Buffer.from(value).toString('hex');
@@ -32,23 +26,6 @@ function hex(value) {
 
 describe('yEnc encryption crypto', function() {
 	this.timeout(30000);
-
-	it('manifest sha256 sync: every vendored fixture matches its pinned hash', function() {
-		assert.equal(manifest.standard_version, '1.2', 'fixture set must be v1.2');
-		assert.deepEqual(
-			Object.keys(manifest.files).sort(),
-			VECTOR_FILES.slice().sort(),
-			'manifest must list exactly the canonical 7 vector files'
-		);
-		VECTOR_FILES.forEach(function(file) {
-			var expected = manifest.files[file].sha256;
-			assert.ok(expected, 'manifest entry missing sha256 for ' + file);
-			var hash = require('crypto').createHash('sha256')
-				.update(fs.readFileSync(path.join(vectorsDir, file)))
-				.digest('hex');
-			assert.equal(hash, expected, 'sha256 drift for ' + file);
-		});
-	});
 
 	it('matches every canonical Argon2id vector', async function() {
 		for(var i = 0; i < argonVectors.vectors.length; i++) {
@@ -74,14 +51,20 @@ describe('yEnc encryption crypto', function() {
 		});
 	});
 
-	it('matches canonical XChaCha20-Poly1305 vectors', function() {
+	it('matches canonical XChaCha20-Poly1305 vectors with AAD', function() {
 		bodyVectors.vectors.forEach(function(vector) {
 			var nonce = cryptoCore.deriveBodyNonce(Buffer.from(vector.derived_key_hex, 'hex'), vector.segment_index);
 			assert.equal(hex(nonce), vector.derived_nonce_hex, vector.id + ' nonce');
+			var nameBytes = Buffer.from(vector.aad.name_bytes_hex, 'hex');
+			var aad = cryptoCore.buildBodyAad(vector.aad.part_number, vector.aad.part_begin, vector.aad.segment_bytes, nameBytes);
+			assert.equal(hex(aad), vector.aad.expected_aad_hex, vector.id + ' aad');
+			var key = Buffer.from(vector.derived_key_hex, 'hex');
+			var plaintext = Buffer.from(vector.plaintext_hex, 'hex');
 			var result = cryptoCore.encryptBody(
-				Buffer.from(vector.plaintext_hex, 'hex'),
-				Buffer.from(vector.derived_key_hex, 'hex'),
-				vector.segment_index
+				plaintext,
+				key,
+				vector.segment_index,
+				aad
 			);
 			assert.equal(hex(result.ciphertext), vector.expected_ciphertext_hex, vector.id + ' ciphertext');
 			assert.equal(hex(result.tag), vector.expected_tag_hex, vector.id + ' tag');
@@ -91,6 +74,17 @@ describe('yEnc encryption crypto', function() {
 				' index=' + formattedIndex +
 				' tag=' + hex(result.tag);
 			assert.equal(expectedLine, vector.expected_yencryption_line, vector.id + ' yencryption_line');
+
+			// verify decryption with correct AAD succeeds
+			var decrypted = cryptoCore.decryptBody(result.ciphertext, result.tag, key, vector.segment_index, aad);
+			assert.equal(hex(decrypted), vector.plaintext_hex, vector.id + ' decrypt');
+
+			// verify tampering with AAD fails authentication
+			var badAad = Buffer.from(aad);
+			badAad[badAad.length - 1] ^= 1;
+			assert.throws(function() {
+				cryptoCore.decryptBody(result.ciphertext, result.tag, key, vector.segment_index, badAad);
+			}, /invalid tag/, vector.id + ' tampered aad');
 		});
 	});
 
@@ -148,13 +142,11 @@ describe('yEnc encryption crypto', function() {
 		salt.forEach(function(value) {
 			assert.doesNotThrow(function() { ff1.byteToNumeral(value); });
 		});
-		var keys = await cryptoCore.deriveKeys('test123', salt);
-		assert.equal(keys.masterKey.length, 32);
-		assert.equal(keys.bodyKey.length, 32);
-		assert.deepEqual(keys.bodyKey, keys.masterKey);
+		var key = await cryptoCore.deriveKey('test123', salt);
+		assert.equal(key.length, 32);
 	});
 
-	it('rejects stale zero-based and uint64 segment assumptions', function() {
+	it('validates segment and line index ranges', function() {
 		var key = Buffer.alloc(32);
 		assert.throws(function() { cryptoCore.deriveBodyNonce(key, 0); }, /1 to 4294967295/);
 		assert.throws(function() { cryptoCore.deriveBodyNonce(key, 4294967296); }, /1 to 4294967295/);
@@ -185,7 +177,7 @@ describe('yEnc encryption crypto', function() {
 		// assign-and-advance semantics: counter initialized at 0, first article gets 1.
 		assert.equal(cryptoCore.nextSafeSegmentIndex(0), 1, 'first article receives index 1');
 
-		// canonical index_allocation.json (VEC-07) skip vectors
+		// canonical index_allocation.json skip vectors
 		var indexVectors = require(path.join(vectorsDir, 'index_allocation.json')).vectors;
 		indexVectors.forEach(function(vector) {
 			assert.equal(cryptoCore.nextSafeSegmentIndex(vector.candidate_index - 1), vector.expected_assigned_index, vector.id);

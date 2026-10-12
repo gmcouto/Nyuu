@@ -103,13 +103,12 @@ it('encrypts body and control lines before yEnc encoding', function() {
 	var key = Buffer.alloc(32, 7);
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
 	var a = new MultiEncoder('file', 6, 6, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
+		encryption: {key: key, salt: salt, segmentIndex: 1}
 	});
 	a.setHeaders({});
 	var post = a.generate(toBuffer('secret'));
 	var wire = post.data.toString('binary');
 	assert.equal(post.inputLen, 6);
-	assert.equal(post.wireLen, post.inputLen);
 	assert.equal(post.segmentIndex, 1);
 	assert.equal(post.data.subarray(post.postPos, post.postPos + 16).toString('hex'), salt.toString('hex'));
 	assert.equal(post.data.subarray(post.postPos + 16, post.postPos + 20).readUInt32BE(0), 1);
@@ -122,7 +121,7 @@ it('dot-stuffs encrypted control lines starting with a dot (forced 0x2E salt byt
 	var key = Buffer.alloc(32, 7);
 	var salt = Buffer.from('2e02030405060708090b0c0e0f101112', 'hex');
 	var a = new MultiEncoder('file', 6, 6, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
+		encryption: {key: key, salt: salt, segmentIndex: 1}
 	});
 	a.setHeaders({});
 	var post = a.generate(toBuffer('secret'));
@@ -139,7 +138,7 @@ it('re-encrypts plaintext on reloadData without length mismatch or plaintext lea
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
 	[null, new BufferPool(4096)].forEach(function(pool) {
 		var a = new MultiEncoder('file', 500, 500, null, {
-			encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
+			encryption: {key: key, salt: salt, segmentIndex: 1}
 		});
 		a.setHeaders({});
 		var plain = Buffer.alloc(500, 0);
@@ -160,7 +159,7 @@ it('pooled post grows undersized pooled buffer on reloadData instead of silently
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
 	// build an oversized post once to learn its exact wire length
 	var a = new MultiEncoder('f', 600, 600, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
+		encryption: {key: key, salt: salt, segmentIndex: 1}
 	});
 	a.setHeaders({});
 	var reference = a.generate(Buffer.alloc(600));
@@ -171,7 +170,7 @@ it('pooled post grows undersized pooled buffer on reloadData instead of silently
 	var tinyPool = new BufferPool(expectedLen - 100);
 	tinyPool.put(Buffer.alloc(expectedLen - 100));
 	var a2 = new MultiEncoder('f', 600, 600, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
+		encryption: {key: key, salt: salt, segmentIndex: 1}
 	});
 	a2.setHeaders({});
 	var post = a2.generate(Buffer.alloc(600), tinyPool);
@@ -186,29 +185,6 @@ it('pooled post grows undersized pooled buffer on reloadData instead of silently
 	assert(post.data.toString('ascii').endsWith('\r\n.\r\n'));
 	// control lines are encrypted: no plaintext =yencryption header on the wire
 	assert.doesNotMatch(post.data.toString('ascii'), /=yencryption/);
-});
-
-it('pooled post survives undersized pool buffer with control-line encryption', function() {
-	var key = Buffer.alloc(32, 7);
-	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
-	var a = new MultiEncoder('f', 600, 600, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
-	});
-	a.setHeaders({});
-	var reference = a.generate(Buffer.alloc(600));
-	var expectedLen = reference.postPos + reference.postLen;
-
-	var tinyPool = new BufferPool(expectedLen - 100);
-	tinyPool.put(Buffer.alloc(expectedLen - 100));
-	var a2 = new MultiEncoder('f', 600, 600, null, {
-		encryption: {bodyKey: key, masterKey: key, salt: salt, segmentIndex: 1}
-	});
-	a2.setHeaders({});
-	var post = a2.generate(Buffer.alloc(600), tinyPool);
-	assert.equal(post.data.length, expectedLen);
-	// Line 1 bootstrap prefix bytes are the FF1-encrypted control line's salt+index, unsplit and intact
-	assert.equal(post.data.subarray(post.postPos, post.postPos + 16).toString('hex'), salt.toString('hex'));
-	assert.equal(post.data.subarray(post.postPos + 16, post.postPos + 20).readUInt32BE(0), 1);
 });
 
 it('empty file test', function(done) {

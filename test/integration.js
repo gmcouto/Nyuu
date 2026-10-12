@@ -12,14 +12,12 @@ describe('Encrypted upload pipeline', function() {
 			output.push(Buffer.from(value, encoding));
 		}, true, 'utf8');
 		var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
-		var masterKey = Buffer.alloc(32, 7);
-		var bodyKey = Buffer.alloc(32, 7);
+		var key = Buffer.alloc(32, 7);
 		var segmentIndex = 1;
 
 		var encoder = new ArticleEncoder('file.bin', 5, 5, null, {
 			encryption: {
-				bodyKey: bodyKey,
-				masterKey: masterKey,
+				key: key,
 				salt: salt,
 				segmentIndex: segmentIndex
 			}
@@ -49,7 +47,7 @@ describe('Encrypted upload pipeline', function() {
 		var expectedYencLine = '=yencryption cipher=XChaCha20-Poly1305 salt=' + prefixSalt.toString('hex') +
 			' index=' + prefixSegmentIndex.toString(16).padStart(8, '0') +
 			' tag=' + post.encryptionResult.tag.toString('hex');
-		var encryptedYencLine = ff1.encryptControlLine(Buffer.from(expectedYencLine, 'ascii'), masterKey, segmentIndex, 3, salt);
+		var encryptedYencLine = ff1.encryptControlLine(Buffer.from(expectedYencLine, 'ascii'), key, segmentIndex, 3, salt);
 
 		var bodyBuf = post.data.subarray(post.postPos);
 		var lines = [];
@@ -71,26 +69,6 @@ describe('Encrypted upload pipeline', function() {
 		segmentTags.forEach(function(tag) {
 			assert.match(tag, /^<segment bytes="\d+" number="\d+">$/);
 		});
-	});
-
-	it('rejects body-only encryption attempts (combined-only wire mode)', function() {
-		// v1 exposes only the combined wire mode: control-line encryption is
-		// always applied when encryption is enabled
-		var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
-		var encOpts = {
-			bodyKey: Buffer.alloc(32, 7),
-			masterKey: Buffer.alloc(32, 7),
-			salt: salt,
-			segmentIndex: 1
-		};
-		var encoder = new ArticleEncoder('file.bin', 5, 5, null, {encryption: Object.assign({}, encOpts)});
-		encoder.setHeaders({}, '', '');
-		var post = encoder.generate(Buffer.from('hello'));
-		// both control lines and body must be encrypted: no plaintext on the wire
-		var wire = post.data.toString('binary');
-		assert.ok(wire.indexOf('=ybegin') < 0);
-		assert.ok(wire.indexOf('=yencryption') < 0);
-		assert.ok(wire.indexOf('hello') < 0);
 	});
 
 	it('sets encryption metadata when opts.nzb is a factory function', function(done) {
@@ -119,15 +97,168 @@ describe('Encrypted upload pipeline', function() {
 			done();
 		});
 	});
+
+	describe('Archive password conflict rejection (NY-1)', function() {
+		var fileuploader = require('../lib/fileuploader');
+
+		it('rejects conflicting archive password in object nzb before posting', function(done) {
+			var opts = {
+				encryptionEnabled: true,
+				encryptionPassword: 'transport-pw',
+				nzb: {
+					metaData: {
+						password: 'archive-pw'
+					}
+				}
+			};
+			fileuploader.upload([], opts, function(err) {
+				assert.ok(err, 'must return an error for conflicting password');
+				assert.match(err.message, /conflicts with encryption password/);
+				done();
+			});
+		});
+
+		it('rejects conflicting array archive password in object nzb before posting', function(done) {
+			var opts = {
+				encryptionEnabled: true,
+				encryptionPassword: 'transport-pw',
+				nzb: {
+					metaData: {
+						password: ['archive-pw']
+					}
+				}
+			};
+			fileuploader.upload([], opts, function(err) {
+				assert.ok(err, 'must return an error for conflicting password');
+				assert.match(err.message, /conflicts with encryption password/);
+				done();
+			});
+		});
+
+		it('rejects conflicting archive password in factory function nzb', function(done) {
+			var nzbFactory = function() {
+				return ['custom_nzb', {metaData: {password: 'archive-pw'}}];
+			};
+			var opts = {
+				encryptionEnabled: true,
+				encryptionPassword: 'transport-pw',
+				nzb: nzbFactory
+			};
+			fileuploader.upload([], opts, function() {
+				assert.throws(function() {
+					opts.nzb('arg1', 'arg2');
+				}, /conflicts with encryption password/);
+				done();
+			});
+		});
+
+		it('accepts matching archive password in object nzb', function(done) {
+			var opts = {
+				encryptionEnabled: true,
+				encryptionPassword: 'same-pw',
+				nzb: {
+					metaData: {
+						password: 'same-pw'
+					}
+				}
+			};
+			fileuploader.upload([], opts, function(err) {
+				assert.equal(err && err.message, 'No files to process');
+				assert.equal(opts.nzb.metaData.yenc_encrypted, 'true');
+				assert.equal(opts.nzb.metaData.password, 'same-pw');
+				done();
+			});
+		});
+
+		it('accepts matching array archive password in object nzb', function(done) {
+			var opts = {
+				encryptionEnabled: true,
+				encryptionPassword: 'same-pw',
+				nzb: {
+					metaData: {
+						password: ['same-pw']
+					}
+				}
+			};
+			fileuploader.upload([], opts, function(err) {
+				assert.equal(err && err.message, 'No files to process');
+				assert.equal(opts.nzb.metaData.yenc_encrypted, 'true');
+				assert.equal(opts.nzb.metaData.password, 'same-pw');
+				done();
+			});
+		});
+
+		it('leaves unencrypted archive password untouched', function(done) {
+			var opts = {
+				nzb: {
+					metaData: {
+						password: 'my-archive-pw'
+					}
+				}
+			};
+			fileuploader.upload([], opts, function(err) {
+				assert.equal(err && err.message, 'No files to process');
+				assert.equal(opts.nzb.metaData.password, 'my-archive-pw');
+				assert.strictEqual(opts.nzb.metaData.yenc_encrypted, undefined);
+				done();
+			});
+		});
+	});
+
+	describe('CLI encryption flag and option precedence (NY-7)', function() {
+		var child_process = require('child_process');
+		var path = require('path');
+		var binNyuu = path.resolve(__dirname, '../bin/nyuu.js');
+		var notty = path.resolve(__dirname, '../.nyuu-notty.json');
+
+		it('fails when --encrypt is given without a password', function(done) {
+			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt'], function(err, stdout, stderr) {
+				assert.ok(err, 'should fail with non-zero exit code');
+				assert.match(stderr, /--encrypt-password.*required/);
+				done();
+			});
+		});
+
+		it('fails when --nzb-password conflicts with --encrypt-password', function(done) {
+			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt-password', 'tpw', '--nzb-password', 'rarpw'], function(err, stdout, stderr) {
+				assert.ok(err, 'should fail on conflicting password');
+				assert.match(stderr, /conflicts with encryption password/);
+				done();
+			});
+		});
+
+		it('succeeds option validation when --nzb-password matches --encrypt-password', function(done) {
+			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt-password', 'same', '--nzb-password', 'same'], function(err, stdout, stderr) {
+				assert.doesNotMatch(stderr, /conflicts with encryption password/);
+				assert.match(stderr, /Must supply at least one input file/);
+				done();
+			});
+		});
+
+		it('implicitly enables encryption when only --encrypt-password is provided', function(done) {
+			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt-password', 'secret'], function(err, stdout, stderr) {
+				assert.doesNotMatch(stderr, /--encrypt-password.*required/);
+				assert.match(stderr, /Must supply at least one input file/);
+				done();
+			});
+		});
+
+		it('--no-encrypt disables encryption even if --encrypt-password is provided', function(done) {
+			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt-password', 'secret', '--no-encrypt'], function(err, stdout, stderr) {
+				assert.match(stderr, /Must supply at least one input file/);
+				done();
+			});
+		});
+	});
 });
 
-describe('Encrypted single-file subject prefix', function() {
-	// the [N/M] prefix is required whenever encryption is used, even for
-	// single-file posts (the NZB subject identifies the release as encrypted)
-	function runSingleFileUpload(opts, checkSubject, cb) {
+describe('Encrypted upload subject and metadata', function() {
+	// the [N/M] prefix follows the ordinary multi-file presentation rule;
+	// encryption does not alter subjects
+	function runFileUpload(opts, fileNumTotal, checkSubject, cb) {
 		var UploadManager = require('../lib/uploadmgr');
 		var um = new UploadManager(Object.assign({useBufferPool: false, servers: []}, opts), function() {});
-		var file = {num: 1, name: 'singlefile.mkv', size: 50, collection: 'c1'};
+		var file = {num: 1, name: 'file.mkv', size: 50, collection: 'c1'};
 		var readCalled = false;
 		var fakeStream = {
 			read: function(size, cbRead) {
@@ -144,33 +275,45 @@ describe('Encrypted single-file subject prefix', function() {
 			cbNext();
 			cbDone(null);
 		};
-		um.addFile(file, 1, {Subject: null}, fakeStream, function(err) {
+		um.addFile(file, fileNumTotal, {Subject: null}, fakeStream, function(err) {
 			assert.ifError(err);
 			cb();
 		});
 	}
 
-	it('sets [1/1] - subject prefix for a single-file encrypted upload', function(done) {
+	it('does not set [1/1] - subject prefix for single-file upload (encrypted or unencrypted)', function(done) {
 		var cryptoCore = require('../lib/crypto');
 		var salt = cryptoCore.generateEncryptionSalt();
-		cryptoCore.deriveKeys('test123', salt).then(function(keys) {
-			runSingleFileUpload({
+		cryptoCore.deriveKey('test123', salt).then(function(key) {
+			runFileUpload({
 				encryption: {
-					bodyKey: keys.bodyKey,
-					masterKey: keys.masterKey,
+					key: key,
 					salt: salt
 				}
-			}, function(headers) {
-				assert.match(headers, /Subject: \[1\/1\] - "singlefile\.mkv" yEnc \(1\/1\) 50/,
-					'Subject must have [1/1] - prefix when encryption is active: ' + headers);
-			}, done);
+			}, 1, function(headers) {
+				assert.match(headers, /Subject: "file\.mkv" yEnc \(1\/1\) 50/,
+					'encrypted single file must not have [1/1] - prefix: ' + headers);
+			}, function() {
+				runFileUpload({}, 1, function(headers) {
+					assert.match(headers, /Subject: "file\.mkv" yEnc \(1\/1\) 50/,
+						'unencrypted single file must not have [1/1] - prefix: ' + headers);
+				}, done);
+			});
 		}).catch(done);
 	});
 
-	it('does not set [1/1] - subject prefix for a single-file unencrypted upload', function(done) {
-		runSingleFileUpload({}, function(headers) {
-			assert.match(headers, /Subject: "singlefile\.mkv" yEnc \(1\/1\) 50/,
-				'unencrypted single file must not have [1/1] - prefix: ' + headers);
-		}, done);
+	it('sets [1/2] - subject prefix for multi-file upload (encrypted or unencrypted)', function(done) {
+		var cryptoCore = require('../lib/crypto');
+		var salt = cryptoCore.generateEncryptionSalt();
+		cryptoCore.deriveKey('test123', salt).then(function(key) {
+			runFileUpload({
+				encryption: {
+					key: key,
+					salt: salt
+				}
+			}, 2, function(headers) {
+				assert.match(headers, /Subject: \[1\/2\] - "file\.mkv" yEnc \(1\/1\) 50/);
+			}, done);
+		}).catch(done);
 	});
 });

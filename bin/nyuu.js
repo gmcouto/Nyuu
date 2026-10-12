@@ -1059,14 +1059,30 @@ if('filename' in argv)
 
 // map custom meta tags
 if(argv.meta) util.extend(ulOpts.nzb.metaData, argv.meta);
+// encryption is enabled by `--encrypt` or implicitly by `--encrypt-password`;
+// the combined wire mode (body + control lines) is the only mode offered
+var encPass = argv['encrypt-password'] !== undefined ? argv['encrypt-password'] : ulOpts.encryptionPassword;
 if(argv.encrypt === false) {
 	ulOpts.encryptionEnabled = false;
-} else if(argv.encrypt || argv['encrypt-password'] !== undefined) {
-	var encPass = argv['encrypt-password'] !== undefined ? argv['encrypt-password'] : ulOpts.encryptionPassword;
+} else if(argv.encrypt || encPass) {
 	if(!encPass)
 		error('`--encrypt-password` is required when encryption is enabled');
 	ulOpts.encryptionEnabled = true;
 	ulOpts.encryptionPassword = encPass;
+}
+if(ulOpts.encryptionEnabled) {
+	var existingPw = ulOpts.nzb && ulOpts.nzb.metaData ? ulOpts.nzb.metaData.password : undefined;
+	if(existingPw !== undefined && existingPw !== null) {
+		var matches = (typeof existingPw === 'string' && existingPw === ulOpts.encryptionPassword) ||
+			(Array.isArray(existingPw) && (existingPw.length === 0 || (existingPw.length === 1 && existingPw[0] === ulOpts.encryptionPassword)));
+		if(!matches)
+			error('Archive metadata password conflicts with encryption password');
+	}
+	if(ulOpts.nzb) {
+		if(!ulOpts.nzb.metaData) ulOpts.nzb.metaData = {};
+		ulOpts.nzb.metaData.yenc_encrypted = 'true';
+		ulOpts.nzb.metaData.password = ulOpts.encryptionPassword;
+	}
 }
 
 if(ulOpts.connectionThreads) {
@@ -1241,28 +1257,18 @@ var writeNewline = function() {
 	process.stderr.write('\n');
 };
 var clrRow = stdErrProgress ? '\x1b[0G\x1B[0K' : '';
-// secrets must never reach the log: scrub the encryption password from every line
-var scrubPassword = function(str) {
-	var pw = argv['encrypt-password'] !== undefined ? argv['encrypt-password'] : ulOpts.encryptionPassword;
-	if(pw && typeof str === 'string' && str.indexOf(pw) !== -1) {
-		return str.split(pw).join('[SCRUBBED]');
-	}
-	return str;
-};
 var writeLog;
 if(argv.colorize) {
 	writeLog = function(col, type, msg) {
-		var outMsg = scrubPassword(msg.toString());
 		process.stderr.write(
-			clrRow + '\x1B['+col+'m' + logTimestamp('') + type + '\x1B[39m ' + outMsg + '\n'
+			clrRow + '\x1B['+col+'m' + logTimestamp('') + type + '\x1B[39m ' + msg.toString() + '\n'
 			+ (progressMgr.getProcessIndicator && stdErrProgress ? progressMgr.getProcessIndicator() : '')
 		);
 	};
 } else {
 	writeLog = function(col, type, msg) {
-		var outMsg = scrubPassword(msg.toString());
 		process.stderr.write(
-			clrRow + logTimestamp('') + type + ' ' + outMsg + '\n'
+			clrRow + logTimestamp('') + type + ' ' + msg.toString() + '\n'
 			+ (progressMgr.getProcessIndicator && stdErrProgress ? progressMgr.getProcessIndicator() : '')
 		);
 	};
