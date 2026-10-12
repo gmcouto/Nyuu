@@ -116,8 +116,8 @@ describe('yEnc encryption crypto', function() {
 	});
 
 	it('encrypts only control lines while preserving line endings and data', function() {
-		['control-vec-07-full-article-4-lines', 'control-vec-08-full-article-54-lines',
-			'control-vec-09-one-byte-data', 'control-vec-10-exact-wrap-data-lines',
+		['control-vec-07-full-article-5-lines', 'control-vec-08-full-article-54-lines',
+			'control-vec-09-one-byte-data', 'control-vec-10-exact-wrap-article-6-lines',
 			'control-vec-11-combined-one-byte-data', 'control-vec-12-single-part-name-contains-part'
 		].forEach(function(vecId) {
 			var vector = controlVectors.vectors.filter(function(item) {

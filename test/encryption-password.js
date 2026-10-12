@@ -91,7 +91,7 @@ describe('encryption password XML 1.0 representability (NY-1)', function() {
 			var data = [];
 			var nzb = new NZBGenerator({ yenc_encrypted: 'true', password: password }, function(blob) {
 				data.push(Buffer.from(blob));
-			}, true, 'utf8');
+			}, true, 'utf8', true);
 			nzb.end();
 			var xml = Buffer.concat(data).toString('utf8');
 			try {
@@ -118,7 +118,7 @@ describe('encryption password XML 1.0 representability (NY-1)', function() {
 		var data = [];
 		var nzb = new NZBGenerator({ yenc_encrypted: 'true', password: password }, function(blob) {
 			data.push(Buffer.from(blob));
-		}, true, 'utf8');
+		}, true, 'utf8', true);
 		nzb.end();
 		return Buffer.concat(data);
 	}
@@ -166,5 +166,18 @@ describe('encryption password XML 1.0 representability (NY-1)', function() {
 		nzb.end();
 		var xml = Buffer.concat(data).toString('utf8');
 		assert(xml.indexOf('<meta type="password">archive\rpw</meta>') !== -1, 'plain meta must not be altered');
+	});
+
+	// NY-F4: a user-supplied yenc_encrypted meta without encryption is an ordinary
+	// meta; the CR escape follows the explicit `encrypted` flag, not the meta.
+	it('writes a manual yenc_encrypted meta without encryption as before (raw CR)', function() {
+		var data = [];
+		var nzb = new NZBGenerator({ yenc_encrypted: 'true', password: 'a\rb' }, function(blob) {
+			data.push(Buffer.from(blob));
+		}, true, 'utf8');
+		nzb.end();
+		var xml = Buffer.concat(data).toString('utf8');
+		assert(xml.indexOf('<meta type="password">a\rb</meta>') !== -1, 'raw CR must be kept without encryption');
+		assert.strictEqual(xml.indexOf('&#xD;'), -1, 'no CR escape without encryption');
 	});
 });
