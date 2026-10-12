@@ -116,11 +116,14 @@ describe('yEnc encryption crypto', function() {
 	});
 
 	it('encrypts only control lines while preserving line endings and data', function() {
-		['control-vec-07-full-article-4-lines', 'control-vec-08-full-article-54-lines'].forEach(function(vecId) {
+		['control-vec-07-full-article-4-lines', 'control-vec-08-full-article-54-lines',
+			'control-vec-09-one-byte-data', 'control-vec-10-exact-wrap-data-lines',
+			'control-vec-11-combined-one-byte-data', 'control-vec-12-single-part-name-contains-part'
+		].forEach(function(vecId) {
 			var vector = controlVectors.vectors.filter(function(item) {
 				return item.id === vecId;
 			})[0];
-			if(!vector) return;
+			assert(vector, 'missing vector ' + vecId);
 			var masterKey = Buffer.from(nonceVectors.control_tweak_vectors[0].master_key_hex, 'hex');
 			var input = Buffer.from(vector.input_lines.join('\r\n') + '\r\n', 'ascii');
 			var expected = Buffer.concat(vector.expected_wire_lines_hex.map(function(line) {
@@ -134,6 +137,24 @@ describe('yEnc encryption crypto', function() {
 			);
 			assert.deepEqual(encrypted, expected, vecId);
 		});
+	});
+
+	// Control Std v1.2 §2 / Body Std §2.1: multipart means a `part=` keyword before `name=`.
+	// The name value runs to end of line, so a single-part name containing " part=" is single-part.
+	// This validates the vector's own metadata (self-consistency), not nyuu code. The nyuu
+	// check for control-vec-12 is the ciphertext deepEqual loop above, which includes vec-12.
+	it('validates the control-vec-12 vector layout (vector self-consistency, not nyuu code)', function() {
+		var vector = controlVectors.vectors.filter(function(item) {
+			return item.id === 'control-vec-12-single-part-name-contains-part';
+		})[0];
+		assert(vector, 'missing control-vec-12');
+		var ybegin = vector.input_lines[0];
+		var keywordsBeforeName = ybegin.split(' name=')[0];
+		var multipart = / part=/.test(keywordsBeforeName);
+		assert.equal(multipart, vector.expected_multipart, 'expected_multipart');
+		// single-part: =ybegin, =yencryption, first data line (3); multipart adds =ypart (4)
+		assert.equal(vector.expected_first_data_line, multipart ? 4 : 3, 'expected_first_data_line');
+		assert.equal(vector.expected_wire_lines_hex.length, vector.total_physical_lines, 'line count');
 	});
 
 	it('uses one alphabet-safe salt for body and control-line encryption', async function() {
