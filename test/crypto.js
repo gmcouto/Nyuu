@@ -5,6 +5,15 @@ var path = require('path');
 
 var cryptoCore = require('../lib/crypto');
 var ff1 = require('../lib/ff1');
+// Exercise individual lines through the production block API.
+function encryptControlLine(line, key, segmentIndex, lineIndex, salt) {
+	var prefix = Buffer.from('=ybegin name=test\r\n' + '\r\n'.repeat(Math.max(0, lineIndex - 2)));
+	if(lineIndex === 1) prefix = Buffer.alloc(0);
+	var block = Buffer.concat([prefix, line, Buffer.from('\r\n')]);
+	var wire = ff1.encryptControlLines(block, key, segmentIndex, salt);
+	return wire.subarray(wire.length - line.length - (lineIndex === 1 ? 20 : 0) - 2, wire.length - 2);
+}
+
 
 var vectorsDir = path.resolve(__dirname, 'test-vectors');
 var fs = require('fs');
@@ -19,6 +28,15 @@ var controlVectors = require(path.join(vectorsDir, 'control_line_encryption.json
 // control_line_encryption.json, index_allocation.json, nonce_tweak.json
 // (nzb_segment_identity.json, malformed_inputs.json and manifest.json are
 // downloader-side fixtures and are not exercised by Nyuu's uploader tests)
+// Standards baseline commit: 4dfc1cd5820af6eade7f4f76f836c3704ac77989,
+// with the unpublished v1.2 cleanup applied. Canonical manifest.json SHA-256:
+// 0aea7299482b8bda6515f96310a3a908eedf15d359c266e66e34ecc4978c4011
+// SHA-256 of each vendored file in that manifest:
+// argon2id.json: fba974e44785c6ca8153900a2b66d1b3469e6469b3860444fadf9f52272e7309
+// body_encryption.json: 94b91c48d7780a1f64fdd4f7789990f32fc97254fc9494b43ada1af6f9efa1a6
+// control_line_encryption.json: d7dfc41a7fd6048b75b0fef66caf41b5568a0020e6460b9a19f37d84e3ec29f5
+// index_allocation.json: 4cacddf8f9aba2b183466f967d9d10a97443f157180c2d0feab3ccac70caada9
+// nonce_tweak.json: c5494b083eaf1168cae94e60a3ea82a21466d47b1cdac5d6a90cebedf91de4b3
 
 function hex(value) {
 	return Buffer.from(value).toString('hex');
@@ -97,7 +115,7 @@ describe('yEnc encryption crypto', function() {
 			);
 			var plaintext = Buffer.from(vector.plaintext_line, 'ascii');
 			var salt = Buffer.from(vector.salt_hex, 'hex');
-			var wire = ff1.encryptControlLine(
+			var wire = encryptControlLine(
 				plaintext,
 				masterKey,
 				vector.segment_index,
@@ -148,9 +166,7 @@ describe('yEnc encryption crypto', function() {
 			return item.id === 'control-vec-12-single-part-name-contains-part';
 		})[0];
 		assert(vector, 'missing control-vec-12');
-		var ybegin = vector.input_lines[0];
-		var keywordsBeforeName = ybegin.split(' name=')[0];
-		var multipart = / part=/.test(keywordsBeforeName);
+		var multipart = vector.input_lines[1].indexOf('=ypart ') === 0;
 		assert.equal(multipart, vector.expected_multipart, 'expected_multipart');
 		// single-part: =ybegin, =yencryption, first data line (3); multipart adds =ypart (4)
 		assert.equal(vector.expected_first_data_line, multipart ? 4 : 3, 'expected_first_data_line');
@@ -161,7 +177,7 @@ describe('yEnc encryption crypto', function() {
 		var salt = cryptoCore.generateEncryptionSalt();
 		assert.equal(salt.length, 16);
 		salt.forEach(function(value) {
-			assert.doesNotThrow(function() { ff1.byteToNumeral(value); });
+			assert(![0, 10, 13].includes(value));
 		});
 		var key = await cryptoCore.deriveKey('test123', salt);
 		assert.equal(key.length, 32);
@@ -179,18 +195,18 @@ describe('yEnc encryption crypto', function() {
 		var validSalt = Buffer.alloc(16, 5);
 		var line = Buffer.from('=ybegin part=1 total=1 line=128 size=123 name=test', 'ascii');
 		// Valid Line 1
-		var wire = ff1.encryptControlLine(line, masterKey, 1, 1, validSalt);
+		var wire = encryptControlLine(line, masterKey, 1, 1, validSalt);
 		assert.equal(wire.length, line.length + 20);
 		// Salt length must be exactly 16
-		assert.throws(function() { ff1.encryptControlLine(line, masterKey, 1, 1, Buffer.alloc(15)); }, /Line 1 requires the 16-byte encryption salt/);
-		assert.throws(function() { ff1.encryptControlLine(line, masterKey, 1, 1, null); }, /Line 1 requires the 16-byte encryption salt/);
+		assert.throws(function() { encryptControlLine(line, masterKey, 1, 1, Buffer.alloc(15)); }, /Line 1 requires the 16-byte encryption salt/);
+		assert.throws(function() { encryptControlLine(line, masterKey, 1, 1, null); }, /Line 1 requires the 16-byte encryption salt/);
 		// Salt must be within Radix 253 alphabet (no 0, 10, 13)
 		var badSalt = Buffer.from(validSalt);
 		badSalt[0] = 0;
-		assert.throws(function() { ff1.encryptControlLine(line, masterKey, 1, 1, badSalt); }, /byte outside the Radix 253 alphabet/);
+		assert.throws(function() { encryptControlLine(line, masterKey, 1, 1, badSalt); }, /byte outside the Radix 253 alphabet/);
 		// Segment index must be valid uint32 >= 1
-		assert.throws(function() { ff1.encryptControlLine(line, masterKey, 0, 1, validSalt); }, /1 to 4294967295/);
-		assert.throws(function() { ff1.encryptControlLine(line, masterKey, 4294967296, 1, validSalt); }, /1 to 4294967295/);
+		assert.throws(function() { encryptControlLine(line, masterKey, 0, 1, validSalt); }, /1 to 4294967295/);
+		assert.throws(function() { encryptControlLine(line, masterKey, 4294967296, 1, validSalt); }, /1 to 4294967295/);
 	});
 
 	it('skips index-framing-rule forbidden segmentIndex bytes when allocating indices', function() {
@@ -229,10 +245,10 @@ describe('yEnc encryption crypto', function() {
 		var validSalt = Buffer.alloc(16, 1);
 		var line = Buffer.from('=ybegin part=1 total=1 line=128 size=1000 name=test.bin');
 		assert.throws(function() {
-			ff1.encryptControlLine(line, masterKey, 10, 1, validSalt);
+			encryptControlLine(line, masterKey, 10, 1, validSalt);
 		}, /forbidden delimiter bytes/);
 		assert.throws(function() {
-			ff1.encryptControlLine(line, masterKey, 266, 1, validSalt);
+			encryptControlLine(line, masterKey, 266, 1, validSalt);
 		}, /forbidden delimiter bytes/);
 	});
 

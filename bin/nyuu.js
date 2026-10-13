@@ -1070,20 +1070,6 @@ if(argv.encrypt === false) {
 	ulOpts.encryptionEnabled = true;
 	ulOpts.encryptionPassword = encPass;
 }
-if(ulOpts.encryptionEnabled) {
-	var existingPw = ulOpts.nzb && ulOpts.nzb.metaData ? ulOpts.nzb.metaData.password : undefined;
-	if(existingPw !== undefined && existingPw !== null) {
-		var matches = (typeof existingPw === 'string' && existingPw === ulOpts.encryptionPassword) ||
-			(Array.isArray(existingPw) && (existingPw.length === 0 || (existingPw.length === 1 && existingPw[0] === ulOpts.encryptionPassword)));
-		if(!matches)
-			error('Archive metadata password conflicts with encryption password');
-	}
-	if(ulOpts.nzb) {
-		if(!ulOpts.nzb.metaData) ulOpts.nzb.metaData = {};
-		ulOpts.nzb.metaData.yenc_encrypted = 'true';
-		ulOpts.nzb.metaData.password = ulOpts.encryptionPassword;
-	}
-}
 
 if(ulOpts.connectionThreads) {
 	var numConnections = 0;

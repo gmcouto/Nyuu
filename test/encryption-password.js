@@ -103,10 +103,13 @@ describe('encryption password XML 1.0 representability (NY-1)', function() {
 		});
 	});
 
-	// Round 2 (reviewer finding 1): the NZB must parse back to the exact password.
+	// The NZB must parse back to the exact password.
 	// Parsing uses Python's expat (a conforming XML 1.0 parser). Node has no built-in
 	// XML parser and nyuu has no XML dependency, so the parser runs as a subprocess.
-	// The skip only happens when python3 is not installed.
+	// Keep this optional check rather than adding an XML dependency solely for
+	// tests or duplicating XML normalization in a hand-written JS parser. Only
+	// the parser round-trip assertions skip when python3 is absent; the native
+	// password validation and exact escaping assertions still run.
 	var PARSE_META_SCRIPT = [
 		'import sys, json, xml.etree.ElementTree as ET',
 		'root = ET.fromstring(sys.stdin.buffer.read())',
@@ -179,5 +182,79 @@ describe('encryption password XML 1.0 representability (NY-1)', function() {
 		var xml = Buffer.concat(data).toString('utf8');
 		assert(xml.indexOf('<meta type="password">a\rb</meta>') !== -1, 'raw CR must be kept without encryption');
 		assert.strictEqual(xml.indexOf('&#xD;'), -1, 'no CR escape without encryption');
+	});
+});
+
+describe('encrypted upload preflight', function() {
+	it('refuses a 2^32-byte input before starting the uploader', function(done) {
+		var started = false;
+		var ee = fileUploader.upload([{name: 'huge.bin', size: 0x100000000, stream: {}}], {
+			encryption: {key: Buffer.alloc(32), salt: Buffer.alloc(16)}, check: {}
+		}, function(err) {
+			assert(err && /2\^32/.test(err.message));
+			assert.strictEqual(started, false);
+			done();
+		});
+		ee.on('start', function() { started = true; });
+	});
+
+	it('refuses an empty transformed name before starting the uploader', function(done) {
+		var started = false;
+		var ee = fileUploader.upload([__filename], {
+			encryption: {key: Buffer.alloc(32), salt: Buffer.alloc(16)}, check: {},
+			fileNameTransform: function() { return ''; }
+		}, function(err) {
+			assert(err && /name.*empty/.test(err.message));
+			assert.strictEqual(started, false);
+			done();
+		});
+		ee.on('start', function() { started = true; });
+	});
+
+});
+
+describe('encrypted upload event and callback forwarding', function() {
+	this.timeout(30000);
+	['start', 'processing_file', 'read_complete'].forEach(function(event) {
+		it('forwards ' + event + ' with its arguments', function(done) {
+			var crypto = require('../lib/crypto');
+			var originalKdf = crypto.deriveKey;
+			var originalUpload = fileUploader.upload;
+			var release;
+			crypto.deriveKey = function() { return new Promise(function(resolve) { release = resolve; }); };
+			var deferred = originalUpload([], {encryptionEnabled: true, encryptionPassword: 'test'}, done);
+			fileUploader.upload = function() {
+				var emitter = new (require('events').EventEmitter)();
+				process.nextTick(function() { emitter.emit(event, 'argument', 7); });
+				return emitter;
+			};
+			deferred.on(event, function(value, number) {
+				crypto.deriveKey = originalKdf;
+				fileUploader.upload = originalUpload;
+				assert.strictEqual(value, 'argument');
+				assert.strictEqual(number, 7);
+				done();
+			});
+			release(Buffer.alloc(32));
+		});
+	});
+	it('calls back once when the real uploader calls back then throws synchronously', function(done) {
+		var crypto = require('../lib/crypto');
+		var originalKdf = crypto.deriveKey;
+		var originalUpload = fileUploader.upload;
+		var release, calls = 0;
+		crypto.deriveKey = function() { return new Promise(function(resolve) { release = resolve; }); };
+		originalUpload([], {encryptionEnabled: true, encryptionPassword: 'test'}, function() { calls++; });
+		fileUploader.upload = function(files, opts, cb) {
+			cb(new Error('first error'));
+			throw new Error('synchronous failure');
+		};
+		release(Buffer.alloc(32));
+		setTimeout(function() {
+			crypto.deriveKey = originalKdf;
+			fileUploader.upload = originalUpload;
+			assert.strictEqual(calls, 1);
+			done();
+		}, 50);
 	});
 });

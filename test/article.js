@@ -236,6 +236,37 @@ it('should throw if sent data isn\'t expected amount', function(done) {
 	done();
 });
 
+it('long multibyte name unencrypted matches upstream', function() {
+	var longName = 'a'.repeat(1023) + '🔑.bin';
+	var yiPre = ' total=1 line=128 size=10 name=', yiSuf = '\r\n=ypart begin=';
+	var expectedYInfo = (Buffer.allocUnsafe || Buffer)(Buffer.byteLength(yiPre + yiSuf, 'utf8') + 1024);
+	var p = expectedYInfo.write(yiPre, 0, expectedYInfo.length, 'utf8');
+	p += expectedYInfo.write(longName, p, 1024, 'utf8');
+	p += expectedYInfo.write(yiSuf, p, expectedYInfo.length - p, 'utf8');
+	expectedYInfo = bufferSlice.call(expectedYInfo, 0, p);
+
+	var a = new MultiEncoder(longName, 10, 10);
+	assert.equal(a.yInfo.toString('binary'), expectedYInfo.toString('binary'));
+});
+
+it('long multibyte name encrypted is valid UTF-8 and equals AAD name', function() {
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	var longName = 'a'.repeat(1023) + '🔑.bin';
+	var a = new MultiEncoder(longName, 10, 10, null, {
+		encryption: {key: key, salt: salt, segmentIndex: 1}
+	});
+	assert.ok(Buffer.isBuffer(a.nameBytes));
+	assert.equal(a.nameBytes.length, 1023);
+	assert.equal(a.nameBytes.toString('utf8'), 'a'.repeat(1023));
+	assert.ok(a.yInfo.toString('binary').indexOf(' name=' + a.nameBytes.toString('binary') + '\r\n') >= 0);
+
+	a.setHeaders({});
+	var post = a.generate(toBuffer('0123456789'));
+	assert.ok(post.encryptionResult);
+	assert.ok(post.encryptionResult.ciphertext);
+});
+
 // TODO: test Post.* stuff?
 // TODO: check message IDs
 // TODO: test raw posts

@@ -4,6 +4,15 @@ var assert = require("assert");
 var ArticleEncoder = require('../lib/article');
 var NZBGenerator = require('../lib/nzb');
 var ff1 = require('../lib/ff1');
+// Exercise individual lines through the production block API.
+function encryptControlLine(line, key, segmentIndex, lineIndex, salt) {
+	var prefix = Buffer.from('=ybegin name=test\r\n' + '\r\n'.repeat(Math.max(0, lineIndex - 2)));
+	if(lineIndex === 1) prefix = Buffer.alloc(0);
+	var block = Buffer.concat([prefix, line, Buffer.from('\r\n')]);
+	var wire = ff1.encryptControlLines(block, key, segmentIndex, salt);
+	return wire.subarray(wire.length - line.length - (lineIndex === 1 ? 20 : 0) - 2, wire.length - 2);
+}
+
 
 describe('Encrypted upload pipeline', function() {
 	it('verifies combined default encryption with Line 1 bootstrap prefix and dual-bootstrap agreement', function() {
@@ -47,7 +56,7 @@ describe('Encrypted upload pipeline', function() {
 		var expectedYencLine = '=yencryption cipher=XChaCha20-Poly1305 salt=' + prefixSalt.toString('hex') +
 			' index=' + prefixSegmentIndex.toString(16).padStart(8, '0') +
 			' tag=' + post.encryptionResult.tag.toString('hex');
-		var encryptedYencLine = ff1.encryptControlLine(Buffer.from(expectedYencLine, 'ascii'), key, segmentIndex, 3, salt);
+		var encryptedYencLine = encryptControlLine(Buffer.from(expectedYencLine, 'ascii'), key, segmentIndex, 3, salt);
 
 		var bodyBuf = post.data.subarray(post.postPos);
 		var lines = [];
@@ -219,10 +228,11 @@ describe('Encrypted upload pipeline', function() {
 			});
 		});
 
-		it('fails when --nzb-password conflicts with --encrypt-password', function(done) {
+		it('leaves archive-password validation to the uploader library', function(done) {
 			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt-password', 'tpw', '--nzb-password', 'rarpw'], function(err, stdout, stderr) {
-				assert.ok(err, 'should fail on conflicting password');
-				assert.match(stderr, /conflicts with encryption password/);
+				assert.ok(err, 'missing input file should fail first');
+				assert.doesNotMatch(stderr, /conflicts with encryption password/);
+				assert.match(stderr, /Must supply at least one input file/);
 				done();
 			});
 		});
