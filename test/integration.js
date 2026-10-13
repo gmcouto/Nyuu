@@ -108,6 +108,37 @@ describe('Encrypted upload pipeline', function() {
 		});
 	});
 
+	it('overrides a user-supplied false yenc_encrypted marker when encryption is enabled', function(done) {
+		var fileuploader = require('../lib/fileuploader');
+		var opts = {
+			encryptionEnabled: true,
+			encryptionPassword: 'secretpassword',
+			nzb: {
+				metaData: {
+					yenc_encrypted: 'false'
+				}
+			}
+		};
+		fileuploader.upload([], opts, function(err) {
+			assert.equal(err && err.message, 'No files to process');
+			assert.equal(opts.nzb.metaData.yenc_encrypted, 'true');
+			// assert on the GENERATED NZB, not just the input object
+			var output = [];
+			var nzb = new NZBGenerator(opts.nzb.metaData, function(value, encoding) {
+				output.push(Buffer.from(value, encoding));
+			}, true, 'utf8');
+			nzb.file('file.bin (1/1)', 'poster', ['alt.test'], 1);
+			nzb.addSegment(5, 'article@example.com');
+			nzb.end();
+			var xml = Buffer.concat(output).toString('utf8');
+			assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
+			assert.ok(xml.indexOf('yenc_encrypted">false') < 0, 'contradictory false marker must not appear');
+			assert.equal(xml.match(/yenc_encrypted/g).length, 1);
+			assert.match(xml, /<meta type="password">secretpassword<\/meta>/);
+			done();
+		});
+	});
+
 	describe('Archive password conflict rejection', function() {
 		var fileuploader = require('../lib/fileuploader');
 
