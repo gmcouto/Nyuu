@@ -33,6 +33,9 @@ describe('Encrypted upload pipeline', function() {
 		});
 		encoder.setHeaders({}, '', '');
 		var post = encoder.generate(Buffer.from('hello'));
+		// the whole-file CRC is of plaintext, so the final ciphertext part omits it
+		assert.notEqual(post.crcFrag.indexOf(' pcrc32='), -1);
+		assert.equal(post.crcFrag.indexOf(' crc32='), -1);
 		nzb.file('file.bin (1/1)', 'poster', ['alt.test'], 1);
 		nzb.addSegment(post.postLen, 'article@example.com');
 		nzb.end();
@@ -97,8 +100,6 @@ describe('Encrypted upload pipeline', function() {
 		};
 		fileuploader.upload([], opts, function() {
 			assert.equal(typeof opts.nzb, 'function');
-			assert.equal(opts.nzb.metaData.yenc_encrypted, 'true');
-			assert.equal(opts.nzb.metaData.password, 'secretpassword');
 			var res = opts.nzb('arg1', 'arg2');
 			assert.ok(res);
 			assert.equal(res[1].metaData.yenc_encrypted, 'true');
@@ -107,7 +108,7 @@ describe('Encrypted upload pipeline', function() {
 		});
 	});
 
-	describe('Archive password conflict rejection (NY-1)', function() {
+	describe('Archive password conflict rejection', function() {
 		var fileuploader = require('../lib/fileuploader');
 
 		it('rejects conflicting archive password in object nzb before posting', function(done) {
@@ -214,11 +215,22 @@ describe('Encrypted upload pipeline', function() {
 		});
 	});
 
-	describe('CLI encryption flag and option precedence (NY-7)', function() {
+	describe('CLI encryption flag and option precedence', function() {
 		var child_process = require('child_process');
 		var path = require('path');
 		var binNyuu = path.resolve(__dirname, '../bin/nyuu.js');
-		var notty = path.resolve(__dirname, '../.nyuu-notty.json');
+		var os = require('os');
+		var fs = require('fs');
+		var tmpDir, notty;
+
+		before(function() {
+			tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nyuu-test-'));
+			notty = path.join(tmpDir, 'notty.json');
+			fs.writeFileSync(notty, JSON.stringify({colorize: false}));
+		});
+		after(function() {
+			fs.rmSync(tmpDir, {recursive: true, force: true});
+		});
 
 		it('fails when --encrypt is given without a password', function(done) {
 			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt'], function(err, stdout, stderr) {

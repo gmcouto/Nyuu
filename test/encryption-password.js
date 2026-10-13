@@ -37,7 +37,7 @@ function expectRejected(password, done) {
 	});
 }
 
-describe('encryption password XML 1.0 representability (NY-1)', function() {
+describe('encryption password XML 1.0 representability', function() {
 	this.timeout(30000);
 
 	it('rejects U+0001 (control character outside XML 1.0)', function(done) {
@@ -171,7 +171,7 @@ describe('encryption password XML 1.0 representability (NY-1)', function() {
 		assert(xml.indexOf('<meta type="password">archive\rpw</meta>') !== -1, 'plain meta must not be altered');
 	});
 
-	// NY-F4: a user-supplied yenc_encrypted meta without encryption is an ordinary
+	// a user-supplied yenc_encrypted meta without encryption is an ordinary
 	// meta; the CR escape follows the explicit `encrypted` flag, not the meta.
 	it('writes a manual yenc_encrypted meta without encryption as before (raw CR)', function() {
 		var data = [];
