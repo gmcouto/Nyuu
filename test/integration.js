@@ -1,9 +1,14 @@
 "use strict";
 
 var assert = require("assert");
+var Readable = require('stream').Readable;
 var ArticleEncoder = require('../lib/article');
 var NZBGenerator = require('../lib/nzb');
 var ff1 = require('../lib/ff1');
+var cryptoUtil = require('../lib/crypto');
+var config = require('../config');
+var fileuploader = require('../lib/fileuploader');
+
 // Exercise individual lines through the production block API.
 function encryptControlLine(line, key, segmentIndex, lineIndex, salt) {
 	var prefix = Buffer.from('=ybegin name=test\r\n' + '\r\n'.repeat(Math.max(0, lineIndex - 2)));
@@ -13,8 +18,104 @@ function encryptControlLine(line, key, segmentIndex, lineIndex, salt) {
 	return wire.subarray(wire.length - line.length - (lineIndex === 1 ? 20 : 0) - 2, wire.length - 2);
 }
 
+// In-memory transport sink: replaces only the final network queue
+// (`lib/uploader`). fileuploader, UploadManager, stream readers, the
+// segment-index allocator, article encoder, KDF and AEAD remain production
+// code. No socket is opened.
+function makeOfflineSink(captures) {
+	function OfflineSink(opts, cb) { this.done = cb; }
+	OfflineSink.prototype.addPost = function(post, readCb, postedCb) {
+		captures.push({
+			salt: post.parent.encryption ? Buffer.from(post.parent.encryption.salt) : null,
+			key: post.parent.encryption ? Buffer.from(post.parent.encryption.key) : null,
+			index: post.segmentIndex,
+			ciphertext: post.encryptionResult ? Buffer.from(post.encryptionResult.ciphertext) : null,
+			tag: post.encryptionResult ? Buffer.from(post.encryptionResult.tag) : null,
+			data: Buffer.from(post.data)
+		});
+		postedCb(null);
+		readCb(null);
+	};
+	OfflineSink.prototype.finished = function() { this.done(null); };
+	OfflineSink.prototype.cancel = function(err) { this.done(err); };
+	OfflineSink.setLogger = function() {};
+	return OfflineSink;
+}
+
+// Installs a fresh OfflineSink as `lib/uploader` for the current test.
+// `lib/uploadmgr` captures the Uploader constructor when it is first
+// loaded, so the fileuploader -> uploadmgr -> uploader chain is
+// re-required with the sink already in place. Returns a cleanup function
+// that restores the original module entries.
+function installOfflineSink(captures) {
+	var paths = [
+		require.resolve('../lib/fileuploader'),
+		require.resolve('../lib/uploadmgr'),
+		require.resolve('../lib/uploader')
+	];
+	var saved = paths.map(function(p) { return require.cache[p]; });
+	var uploaderPath = require.resolve('../lib/uploader');
+	paths.forEach(function(p) { delete require.cache[p]; });
+	require.cache[uploaderPath] = {
+		id: uploaderPath,
+		filename: uploaderPath,
+		loaded: true,
+		exports: makeOfflineSink(captures)
+	};
+	fileuploader = require('../lib/fileuploader');
+	return function() {
+		paths.forEach(function(p, i) {
+			if(saved[i]) require.cache[p] = saved[i];
+			else delete require.cache[p];
+		});
+		fileuploader = require('../lib/fileuploader');
+	};
+}
+
+// Writable stream sink that captures the emitted NZB XML.
+function makeXmlCapture(capturesOut) {
+	var chunks = [];
+	capturesOut.push(chunks);
+	return {
+		writable: true,
+		write: function(c) { chunks.push(Buffer.from(c)); return true; },
+		end: function(cb) { if(cb) cb(); }
+	};
+}
+
+function makeStream(name, text) {
+	return [{name: name, size: text.length, stream: Readable.from([Buffer.from(text)])}];
+}
+
+function baseOpts(over) {
+	return Object.assign({}, config, {
+		encryptionEnabled: true,
+		encryptionPassword: 'test123',
+		useBufferPool: false,
+		check: {},
+		articleSize: 32,
+		diskBufferSize: 1,
+		postHeaders: {From: 'test@example.test', Newsgroups: 'alt.test'}
+	}, over);
+}
+
+function startUpload(files, opts) {
+	return new Promise(function(resolve, reject) {
+		fileuploader.upload(files, opts, function(err) {
+			if(err) reject(err); else resolve();
+		});
+	});
+}
 
 describe('Encrypted upload pipeline', function() {
+	var cleanup = null;
+	afterEach(function() {
+		if(cleanup) {
+			cleanup();
+			cleanup = null;
+		}
+	});
+
 	it('verifies combined default encryption with Line 1 bootstrap prefix and dual-bootstrap agreement', function() {
 		var output = [];
 		var nzb = new NZBGenerator({yenc_encrypted: 'true', password: 'test123'}, function(value, encoding) {
@@ -83,78 +184,295 @@ describe('Encrypted upload pipeline', function() {
 		});
 	});
 
-	it('sets encryption metadata when opts.nzb is a factory function', function(done) {
-		var fileuploader = require('../lib/fileuploader');
+	it('sets encryption metadata when opts.nzb is a factory function', function() {
+		var captures = [];
+		cleanup = installOfflineSink(captures);
+		var xmlOutputs = [];
 		var createdNzbOpts = null;
 		var nzbFactory = function() {
 			createdNzbOpts = {
-				writeTo: function() {},
+				writeTo: function() { return makeXmlCapture(xmlOutputs); },
 				metaData: {}
 			};
 			return ['custom_nzb', createdNzbOpts];
 		};
-		var opts = {
+		var opts = baseOpts({
 			encryptionEnabled: true,
 			encryptionPassword: 'secretpassword',
 			nzb: nzbFactory
-		};
-		fileuploader.upload([], opts, function() {
-			assert.equal(typeof opts.nzb, 'function');
-			var res = opts.nzb('arg1', 'arg2');
-			assert.ok(res);
-			assert.equal(res[1].metaData.yenc_encrypted, 'true');
-			assert.equal(res[1].metaData.password, 'secretpassword');
-			done();
+		});
+		return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+			// caller factory identity is unchanged
+			assert.strictEqual(opts.nzb, nzbFactory);
+			// caller factory metadata is not mutated
+			assert.deepStrictEqual(createdNzbOpts.metaData, {});
+			assert.strictEqual(opts.encryption, undefined);
+			// emitted NZB XML has the required metadata
+			assert.equal(xmlOutputs.length, 1);
+			var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+			assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
+			assert.match(xml, /<meta type="password">secretpassword<\/meta>/);
 		});
 	});
 
-	it('overrides a user-supplied false yenc_encrypted marker when encryption is enabled', function(done) {
-		var fileuploader = require('../lib/fileuploader');
-		var opts = {
+	it('overrides a user-supplied false yenc_encrypted marker when encryption is enabled', function() {
+		var captures = [];
+		cleanup = installOfflineSink(captures);
+		var xmlOutputs = [];
+		var callerMeta = {
+			yenc_encrypted: 'false'
+		};
+		var opts = baseOpts({
 			encryptionEnabled: true,
 			encryptionPassword: 'secretpassword',
 			nzb: {
-				metaData: {
-					yenc_encrypted: 'false'
-				}
+				writeTo: function() { return makeXmlCapture(xmlOutputs); },
+				metaData: callerMeta
 			}
-		};
-		fileuploader.upload([], opts, function(err) {
-			assert.equal(err && err.message, 'No files to process');
-			assert.equal(opts.nzb.metaData.yenc_encrypted, 'true');
-			// assert on the GENERATED NZB, not just the input object
-			var output = [];
-			var nzb = new NZBGenerator(opts.nzb.metaData, function(value, encoding) {
-				output.push(Buffer.from(value, encoding));
-			}, true, 'utf8');
-			nzb.file('file.bin (1/1)', 'poster', ['alt.test'], 1);
-			nzb.addSegment(5, 'article@example.com');
-			nzb.end();
-			var xml = Buffer.concat(output).toString('utf8');
+		});
+		return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+			// caller's metaData must not be mutated
+			assert.equal(callerMeta.yenc_encrypted, 'false');
+			assert.strictEqual(opts.encryption, undefined);
+			// emitted NZB XML carries the authoritative marker and password
+			assert.equal(xmlOutputs.length, 1);
+			var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
 			assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
 			assert.ok(xml.indexOf('yenc_encrypted">false') < 0, 'contradictory false marker must not appear');
 			assert.equal(xml.match(/yenc_encrypted/g).length, 1);
 			assert.match(xml, /<meta type="password">secretpassword<\/meta>/);
-			done();
 		});
 	});
 
-	it('encryption password overwrites archive password without error when both are set', function(done) {
-		var fileuploader = require('../lib/fileuploader');
-		var opts = {
+	it('encryption password overwrites archive password without error when both are set', function() {
+		var captures = [];
+		cleanup = installOfflineSink(captures);
+		var xmlOutputs = [];
+		var callerMeta = {
+			password: 'archive-pw'
+		};
+		var opts = baseOpts({
 			encryptionEnabled: true,
 			encryptionPassword: 'transport-pw',
 			nzb: {
-				metaData: {
-					password: 'archive-pw'
-				}
+				writeTo: function() { return makeXmlCapture(xmlOutputs); },
+				metaData: callerMeta
 			}
-		};
-		fileuploader.upload([], opts, function(err) {
-			assert.equal(err && err.message, 'No files to process');
-			assert.equal(opts.nzb.metaData.yenc_encrypted, 'true');
-			assert.equal(opts.nzb.metaData.password, 'transport-pw');
-			done();
+		});
+		return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+			// caller's metaData must not be mutated
+			assert.equal(callerMeta.password, 'archive-pw');
+			assert.equal(callerMeta.yenc_encrypted, undefined);
+			assert.strictEqual(opts.encryption, undefined);
+			// emitted NZB XML: encryption password is authoritative
+			assert.equal(xmlOutputs.length, 1);
+			var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+			assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
+			assert.match(xml, /<meta type="password">transport-pw<\/meta>/);
+			assert.ok(xml.indexOf('archive-pw') < 0, 'archive password must not appear in generated XML');
+			assert.equal(xml.match(/<meta type="password">/g).length, 1);
+		});
+	});
+
+	describe('encrypted upload state isolation', function() {
+		this.timeout(30000);
+
+		it('reused caller options produce distinct salts and derived nonces, each starting at index 1', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var opts = baseOpts();
+			return startUpload(makeStream('same.bin', 'AAAAA'), opts).then(function() {
+				return startUpload(makeStream('same.bin', 'BBBBB'), opts);
+			}).then(function() {
+				assert.equal(captures.length, 2);
+				// each invocation starts its own upload session at index 1
+				assert.equal(captures[0].index, 1);
+				assert.equal(captures[1].index, 1);
+				// fresh random per-upload salt for each invocation
+				assert.ok(!captures[0].salt.equals(captures[1].salt), 'salts must differ across uploads');
+				// keys must differ (derived from distinct salts)
+				assert.ok(!captures[0].key.equals(captures[1].key), 'derived keys must differ across uploads');
+				// derived body nonces must differ (nonce = HMAC(key, segmentIndex);
+				// a fresh salt/key at the same index must yield a different nonce)
+				var nonce0 = cryptoUtil.deriveBodyNonce(captures[0].key, captures[0].index);
+				var nonce1 = cryptoUtil.deriveBodyNonce(captures[1].key, captures[1].index);
+				assert.ok(!nonce0.equals(nonce1), 'derived nonces must differ across uploads');
+				// ciphertext XOR does not reveal plaintext XOR
+				var xor = Buffer.alloc(5);
+				for(var i = 0; i < 5; i++) xor[i] = captures[0].ciphertext[i] ^ captures[1].ciphertext[i];
+				var plainXor = Buffer.alloc(5, 'A'.charCodeAt(0) ^ 'B'.charCodeAt(0));
+				assert.ok(!xor.equals(plainXor), 'ciphertext XOR must not reveal plaintext XOR');
+				// caller's options object must not be mutated with invocation-owned
+				// encryption state
+				assert.strictEqual(opts.encryption, undefined);
+			});
+		});
+
+		it('reused caller options with a changed second password authenticate with that password', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var opts = baseOpts();
+			var xchacha20poly1305 = require('@noble/ciphers/chacha').xchacha20poly1305;
+			return startUpload(makeStream('same.bin', 'AAAAA'), opts).then(function() {
+				opts.encryptionPassword = 'second-password';
+				return startUpload(makeStream('same.bin', 'BBBBB'), opts);
+			}).then(function() {
+				assert.equal(captures.length, 2);
+				assert.ok(!captures[0].key.equals(captures[1].key), 'changed password must derive a new key');
+				// the second upload's ciphertext must authenticate and decrypt with
+				// the NEW password
+				var aad = cryptoUtil.buildBodyAad(1, 1, 5, Buffer.from('same.bin', 'utf8'));
+				var sealed = Buffer.concat([captures[1].ciphertext, captures[1].tag]);
+				var nonce = cryptoUtil.deriveBodyNonce(captures[1].key, captures[1].index);
+				var plain = Buffer.from(xchacha20poly1305(captures[1].key, nonce, aad).decrypt(sealed));
+				assert.equal(plain.toString(), 'BBBBB');
+				// the OLD password's key must fail authentication on the new upload
+				return cryptoUtil.deriveKey('test123', captures[1].salt).then(function(oldKey) {
+					var oldNonce = cryptoUtil.deriveBodyNonce(oldKey, captures[1].index);
+					assert.throws(function() {
+						xchacha20poly1305(oldKey, oldNonce, aad).decrypt(sealed);
+					}, 'old password must not authenticate the second upload');
+				});
+			});
+		});
+
+		it('reused caller options with encryption disabled on second call emits ordinary output with no generated marker', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var xmlOutputs = [];
+			var opts = baseOpts({
+				nzb: {
+					writeTo: function() { return makeXmlCapture(xmlOutputs); },
+					metaData: {}
+				}
+			});
+			return startUpload(makeStream('same.bin', 'AAAAA'), opts).then(function() {
+				assert.equal(captures.length, 1);
+				assert.ok(captures[0].salt, 'first upload must be encrypted');
+				opts.encryptionEnabled = false;
+				return startUpload(makeStream('same.bin', 'BBBBB'), opts);
+			}).then(function() {
+				assert.equal(captures.length, 2, 'second upload must complete');
+				assert.strictEqual(captures[1].salt, null, 'second upload must not encrypt');
+				// ordinary yEnc output, no encryption
+				var body2 = captures[1].data.toString('ascii');
+				assert.ok(body2.indexOf('=ybegin') >= 0, 'ordinary yEnc header present');
+				assert.ok(body2.indexOf('name=same.bin') >= 0, 'ordinary name present in =ybegin');
+				assert.ok(body2.indexOf('=yencryption') < 0, 'no generated =yencryption marker');
+				// the second upload's NZB XML must not carry generated encryption metadata
+				assert.equal(xmlOutputs.length, 2);
+				var xml2 = Buffer.concat(xmlOutputs[1]).toString('utf8');
+				assert.ok(xml2.indexOf('yenc_encrypted') < 0, 'disabled-encryption reuse must not emit generated marker');
+				assert.ok(xml2.indexOf('<meta type="password">') < 0, 'no generated password meta');
+				// while the first upload's XML DID carry it
+				var xml1 = Buffer.concat(xmlOutputs[0]).toString('utf8');
+				assert.match(xml1, /<meta type="yenc_encrypted">true<\/meta>/);
+				assert.match(xml1, /<meta type="password">test123<\/meta>/);
+			});
+		});
+
+		it('object-form nzb config: caller object and metaData are not mutated; generated XML carries metadata', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var xmlOutputs = [];
+			var callerMeta = {custom: 'value'};
+			var callerNzb = {
+				writeTo: function() { return makeXmlCapture(xmlOutputs); },
+				metaData: callerMeta
+			};
+			var opts = baseOpts({nzb: callerNzb});
+			return startUpload(makeStream('same.bin', 'AAAAA'), opts).then(function() {
+				assert.equal(captures.length, 1);
+				// caller's object identity and contents untouched
+				assert.strictEqual(opts.nzb, callerNzb);
+				assert.strictEqual(opts.nzb.metaData, callerMeta);
+				assert.equal(callerMeta.yenc_encrypted, undefined);
+				assert.equal(callerMeta.password, undefined);
+				// generated XML carries the metadata
+				var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+				assert.match(xml, /<meta type="custom">value<\/meta>/);
+				assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
+				assert.match(xml, /<meta type="password">test123<\/meta>/);
+			});
+		});
+
+		it('factory-form nzb: caller factory and its returned identity/metadata are unchanged; generated XML carries metadata', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var xmlOutputs = [];
+			var factoryCalls = 0;
+			var factoryReturned = null;
+			var factoryNzb = function() {
+				factoryCalls++;
+				factoryReturned = ['nzb-id-' + factoryCalls, {
+					writeTo: function() { return makeXmlCapture(xmlOutputs); },
+					metaData: {custom: 'value'}
+				}];
+				return factoryReturned;
+			};
+			var opts = baseOpts({nzb: factoryNzb});
+			return startUpload(makeStream('same.bin', 'AAAAA'), opts).then(function() {
+				assert.equal(captures.length, 1);
+				// caller's factory function identity unchanged
+				assert.strictEqual(opts.nzb, factoryNzb);
+				assert.equal(factoryCalls, 1);
+				// caller's returned object must not be mutated: re-invoke the
+				// factory and verify the fresh metaData has no generated fields
+				var fresh = factoryNzb();
+				assert.strictEqual(fresh, factoryReturned);
+				assert.equal(fresh[1].metaData.yenc_encrypted, undefined);
+				assert.equal(fresh[1].metaData.password, undefined);
+				// generated XML carries the metadata
+				var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+				assert.match(xml, /<meta type="custom">value<\/meta>/);
+				assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
+				assert.match(xml, /<meta type="password">test123<\/meta>/);
+			});
+		});
+
+		it('preserves caller-supplied low-level encryption context unchanged', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var suppliedKey = Buffer.alloc(32, 9);
+			var suppliedSalt = cryptoUtil.generateEncryptionSalt();
+			var suppliedContext = {
+				key: suppliedKey,
+				salt: suppliedSalt
+			};
+			var opts = baseOpts({
+				encryption: suppliedContext
+			});
+			return startUpload(makeStream('same.bin', 'AAAAA'), opts).then(function() {
+				assert.equal(captures.length, 1);
+				// the supplied key and salt were used directly
+				assert.ok(captures[0].key.equals(suppliedKey));
+				assert.ok(captures[0].salt.equals(suppliedSalt));
+				// caller's supplied object reference is preserved
+				assert.strictEqual(opts.encryption, suppliedContext);
+			});
+		});
+
+		it('emitted encryption password is authoritative over an emitted archive password', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var xmlOutputs = [];
+			var opts = baseOpts({
+				encryptionPassword: 'transport-pw',
+				nzb: {
+					writeTo: function() { return makeXmlCapture(xmlOutputs); },
+					metaData: {password: 'archive-pw'}
+				}
+			});
+			return startUpload(makeStream('same.bin', 'AAAAA'), opts).then(function() {
+				assert.equal(captures.length, 1);
+				// caller's metaData untouched
+				assert.equal(opts.nzb.metaData.password, 'archive-pw');
+				// generated XML: the transport password wins
+				var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+				assert.match(xml, /<meta type="password">transport-pw<\/meta>/);
+				assert.ok(xml.indexOf('archive-pw') < 0, 'archive password must not appear in emitted XML');
+				assert.equal(xml.match(/<meta type="password">/g).length, 1);
+			});
 		});
 	});
 
