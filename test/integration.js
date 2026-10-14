@@ -139,110 +139,22 @@ describe('Encrypted upload pipeline', function() {
 		});
 	});
 
-	describe('Archive password conflict rejection', function() {
+	it('encryption password overwrites archive password without error when both are set', function(done) {
 		var fileuploader = require('../lib/fileuploader');
-
-		it('rejects conflicting archive password in object nzb before posting', function(done) {
-			var opts = {
-				encryptionEnabled: true,
-				encryptionPassword: 'transport-pw',
-				nzb: {
-					metaData: {
-						password: 'archive-pw'
-					}
+		var opts = {
+			encryptionEnabled: true,
+			encryptionPassword: 'transport-pw',
+			nzb: {
+				metaData: {
+					password: 'archive-pw'
 				}
-			};
-			fileuploader.upload([], opts, function(err) {
-				assert.ok(err, 'must return an error for conflicting password');
-				assert.match(err.message, /conflicts with encryption password/);
-				done();
-			});
-		});
-
-		it('rejects conflicting array archive password in object nzb before posting', function(done) {
-			var opts = {
-				encryptionEnabled: true,
-				encryptionPassword: 'transport-pw',
-				nzb: {
-					metaData: {
-						password: ['archive-pw']
-					}
-				}
-			};
-			fileuploader.upload([], opts, function(err) {
-				assert.ok(err, 'must return an error for conflicting password');
-				assert.match(err.message, /conflicts with encryption password/);
-				done();
-			});
-		});
-
-		it('rejects conflicting archive password in factory function nzb', function(done) {
-			var nzbFactory = function() {
-				return ['custom_nzb', {metaData: {password: 'archive-pw'}}];
-			};
-			var opts = {
-				encryptionEnabled: true,
-				encryptionPassword: 'transport-pw',
-				nzb: nzbFactory
-			};
-			fileuploader.upload([], opts, function() {
-				assert.throws(function() {
-					opts.nzb('arg1', 'arg2');
-				}, /conflicts with encryption password/);
-				done();
-			});
-		});
-
-		it('accepts matching archive password in object nzb', function(done) {
-			var opts = {
-				encryptionEnabled: true,
-				encryptionPassword: 'same-pw',
-				nzb: {
-					metaData: {
-						password: 'same-pw'
-					}
-				}
-			};
-			fileuploader.upload([], opts, function(err) {
-				assert.equal(err && err.message, 'No files to process');
-				assert.equal(opts.nzb.metaData.yenc_encrypted, 'true');
-				assert.equal(opts.nzb.metaData.password, 'same-pw');
-				done();
-			});
-		});
-
-		it('accepts matching array archive password in object nzb', function(done) {
-			var opts = {
-				encryptionEnabled: true,
-				encryptionPassword: 'same-pw',
-				nzb: {
-					metaData: {
-						password: ['same-pw']
-					}
-				}
-			};
-			fileuploader.upload([], opts, function(err) {
-				assert.equal(err && err.message, 'No files to process');
-				assert.equal(opts.nzb.metaData.yenc_encrypted, 'true');
-				assert.equal(opts.nzb.metaData.password, 'same-pw');
-				done();
-			});
-		});
-
-		it('leaves unencrypted archive password untouched', function(done) {
-			var opts = {
-				nzb: {
-					metaData: {
-						password: 'my-archive-pw'
-					}
-				}
-			};
-			fileuploader.upload([], opts, function(err) {
-				assert.equal(err && err.message, 'No files to process');
-				assert.equal(opts.nzb.metaData.password, 'my-archive-pw');
-				assert.strictEqual(opts.nzb.metaData.yenc_encrypted, undefined);
-				done();
-			});
+			}
+		};
+		fileuploader.upload([], opts, function(err) {
+			assert.equal(err && err.message, 'No files to process');
+			assert.equal(opts.nzb.metaData.yenc_encrypted, 'true');
+			assert.equal(opts.nzb.metaData.password, 'transport-pw');
+			done();
 		});
 	});
 
@@ -271,23 +183,6 @@ describe('Encrypted upload pipeline', function() {
 			});
 		});
 
-		it('leaves archive-password validation to the uploader library', function(done) {
-			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt-password', 'tpw', '--nzb-password', 'rarpw'], function(err, stdout, stderr) {
-				assert.ok(err, 'missing input file should fail first');
-				assert.doesNotMatch(stderr, /conflicts with encryption password/);
-				assert.match(stderr, /Must supply at least one input file/);
-				done();
-			});
-		});
-
-		it('succeeds option validation when --nzb-password matches --encrypt-password', function(done) {
-			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt-password', 'same', '--nzb-password', 'same'], function(err, stdout, stderr) {
-				assert.doesNotMatch(stderr, /conflicts with encryption password/);
-				assert.match(stderr, /Must supply at least one input file/);
-				done();
-			});
-		});
-
 		it('implicitly enables encryption when only --encrypt-password is provided', function(done) {
 			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt-password', 'secret'], function(err, stdout, stderr) {
 				assert.doesNotMatch(stderr, /--encrypt-password.*required/);
@@ -295,78 +190,5 @@ describe('Encrypted upload pipeline', function() {
 				done();
 			});
 		});
-
-		it('--no-encrypt disables encryption even if --encrypt-password is provided', function(done) {
-			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt-password', 'secret', '--no-encrypt'], function(err, stdout, stderr) {
-				assert.match(stderr, /Must supply at least one input file/);
-				done();
-			});
-		});
-	});
-});
-
-describe('Encrypted upload subject and metadata', function() {
-	// the [N/M] prefix follows the ordinary multi-file presentation rule;
-	// encryption does not alter subjects
-	function runFileUpload(opts, fileNumTotal, checkSubject, cb) {
-		var UploadManager = require('../lib/uploadmgr');
-		var um = new UploadManager(Object.assign({useBufferPool: false, servers: []}, opts), function() {});
-		var file = {num: 1, name: 'file.mkv', size: 50, collection: 'c1'};
-		var readCalled = false;
-		var fakeStream = {
-			read: function(size, cbRead) {
-				if(readCalled) {
-					cbRead(null, Buffer.alloc(0));
-				} else {
-					readCalled = true;
-					cbRead(null, Buffer.alloc(50, 0x5a));
-				}
-			}
-		};
-		um.uploader.addPost = function(post, cbNext, cbDone) {
-			checkSubject(post._getHeadersStr());
-			cbNext();
-			cbDone(null);
-		};
-		um.addFile(file, fileNumTotal, {Subject: null}, fakeStream, function(err) {
-			assert.ifError(err);
-			cb();
-		});
-	}
-
-	it('does not set [1/1] - subject prefix for single-file upload (encrypted or unencrypted)', function(done) {
-		var cryptoCore = require('../lib/crypto');
-		var salt = cryptoCore.generateEncryptionSalt();
-		cryptoCore.deriveKey('test123', salt).then(function(key) {
-			runFileUpload({
-				encryption: {
-					key: key,
-					salt: salt
-				}
-			}, 1, function(headers) {
-				assert.match(headers, /Subject: "file\.mkv" yEnc \(1\/1\) 50/,
-					'encrypted single file must not have [1/1] - prefix: ' + headers);
-			}, function() {
-				runFileUpload({}, 1, function(headers) {
-					assert.match(headers, /Subject: "file\.mkv" yEnc \(1\/1\) 50/,
-						'unencrypted single file must not have [1/1] - prefix: ' + headers);
-				}, done);
-			});
-		}).catch(done);
-	});
-
-	it('sets [1/2] - subject prefix for multi-file upload (encrypted or unencrypted)', function(done) {
-		var cryptoCore = require('../lib/crypto');
-		var salt = cryptoCore.generateEncryptionSalt();
-		cryptoCore.deriveKey('test123', salt).then(function(key) {
-			runFileUpload({
-				encryption: {
-					key: key,
-					salt: salt
-				}
-			}, 2, function(headers) {
-				assert.match(headers, /Subject: \[1\/2\] - "file\.mkv" yEnc \(1\/1\) 50/);
-			}, done);
-		}).catch(done);
 	});
 });

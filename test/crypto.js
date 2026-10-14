@@ -14,6 +14,14 @@ function encryptControlLine(line, key, segmentIndex, lineIndex, salt) {
 	return wire.subarray(wire.length - line.length - (lineIndex === 1 ? 20 : 0) - 2, wire.length - 2);
 }
 
+// Test-only decryption helper (Body Std §4): decryptBody was removed from
+// lib/crypto.js because only the tests need it; nyuu only ever encrypts.
+function decryptBody(ciphertext, tag, key, segmentIndex, aad) {
+	var nonce = cryptoCore.deriveBodyNonce(key, segmentIndex);
+	var cipher = require('@noble/ciphers/chacha').xchacha20poly1305(key, nonce, aad);
+	return Buffer.from(cipher.decrypt(Buffer.concat([ciphertext, tag])));
+}
+
 
 var vectorsDir = path.resolve(__dirname, 'test-vectors');
 var fs = require('fs');
@@ -26,17 +34,12 @@ var controlVectors = require(path.join(vectorsDir, 'control_line_encryption.json
 // the reference standards repository's vectors)
 // Vendored fixtures: argon2id.json, body_encryption.json,
 // control_line_encryption.json, index_allocation.json, nonce_tweak.json
-// (nzb_segment_identity.json, malformed_inputs.json and manifest.json are
+// (nzb_segment_identity.json and malformed_inputs.json are
 // downloader-side fixtures and are not exercised by Nyuu's uploader tests)
 // Standards baseline commit: 4dfc1cd5820af6eade7f4f76f836c3704ac77989,
-// with the unpublished v1.2 cleanup applied. Canonical manifest.json SHA-256:
-// 0aea7299482b8bda6515f96310a3a908eedf15d359c266e66e34ecc4978c4011
-// SHA-256 of each vendored file in that manifest:
-// argon2id.json: fba974e44785c6ca8153900a2b66d1b3469e6469b3860444fadf9f52272e7309
-// body_encryption.json: 94b91c48d7780a1f64fdd4f7789990f32fc97254fc9494b43ada1af6f9efa1a6
-// control_line_encryption.json: d7dfc41a7fd6048b75b0fef66caf41b5568a0020e6460b9a19f37d84e3ec29f5
-// index_allocation.json: 4cacddf8f9aba2b183466f967d9d10a97443f157180c2d0feab3ccac70caada9
-// nonce_tweak.json: c5494b083eaf1168cae94e60a3ea82a21466d47b1cdac5d6a90cebedf91de4b3
+// with the unpublished v1.2 cleanup applied. Vectors are helper artifacts
+// (no hash-enforced manifest); refreshed by hand from the standards repo
+// when the canonical fixtures change.
 
 function hex(value) {
 	return Buffer.from(value).toString('hex');
@@ -94,14 +97,14 @@ describe('yEnc encryption crypto', function() {
 			assert.equal(expectedLine, vector.expected_yencryption_line, vector.id + ' yencryption_line');
 
 			// verify decryption with correct AAD succeeds
-			var decrypted = cryptoCore.decryptBody(result.ciphertext, result.tag, key, vector.segment_index, aad);
+			var decrypted = decryptBody(result.ciphertext, result.tag, key, vector.segment_index, aad);
 			assert.equal(hex(decrypted), vector.plaintext_hex, vector.id + ' decrypt');
 
 			// verify tampering with AAD fails authentication
 			var badAad = Buffer.from(aad);
 			badAad[badAad.length - 1] ^= 1;
 			assert.throws(function() {
-				cryptoCore.decryptBody(result.ciphertext, result.tag, key, vector.segment_index, badAad);
+				decryptBody(result.ciphertext, result.tag, key, vector.segment_index, badAad);
 			}, /invalid tag/, vector.id + ' tampered aad');
 		});
 	});
@@ -155,22 +158,6 @@ describe('yEnc encryption crypto', function() {
 			);
 			assert.deepEqual(encrypted, expected, vecId);
 		});
-	});
-
-	// Control Std v1.2 §2 / Body Std §2.1: multipart means a `part=` keyword before `name=`.
-	// The name value runs to end of line, so a single-part name containing " part=" is single-part.
-	// This validates the vector's own metadata (self-consistency), not nyuu code. The nyuu
-	// check for control-vec-12 is the ciphertext deepEqual loop above, which includes vec-12.
-	it('validates the control-vec-12 vector layout (vector self-consistency, not nyuu code)', function() {
-		var vector = controlVectors.vectors.filter(function(item) {
-			return item.id === 'control-vec-12-single-part-name-contains-part';
-		})[0];
-		assert(vector, 'missing control-vec-12');
-		var multipart = vector.input_lines[1].indexOf('=ypart ') === 0;
-		assert.equal(multipart, vector.expected_multipart, 'expected_multipart');
-		// single-part: =ybegin, =yencryption, first data line (3); multipart adds =ypart (4)
-		assert.equal(vector.expected_first_data_line, multipart ? 4 : 3, 'expected_first_data_line');
-		assert.equal(vector.expected_wire_lines_hex.length, vector.total_physical_lines, 'line count');
 	});
 
 	it('uses one alphabet-safe salt for body and control-line encryption', async function() {

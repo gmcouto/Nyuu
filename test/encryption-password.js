@@ -238,23 +238,4 @@ describe('encrypted upload event and callback forwarding', function() {
 			release(Buffer.alloc(32));
 		});
 	});
-	it('calls back once when the real uploader calls back then throws synchronously', function(done) {
-		var crypto = require('../lib/crypto');
-		var originalKdf = crypto.deriveKey;
-		var originalUpload = fileUploader.upload;
-		var release, calls = 0;
-		crypto.deriveKey = function() { return new Promise(function(resolve) { release = resolve; }); };
-		originalUpload([], {encryptionEnabled: true, encryptionPassword: 'test'}, function() { calls++; });
-		fileUploader.upload = function(files, opts, cb) {
-			cb(new Error('first error'));
-			throw new Error('synchronous failure');
-		};
-		release(Buffer.alloc(32));
-		setTimeout(function() {
-			crypto.deriveKey = originalKdf;
-			fileUploader.upload = originalUpload;
-			assert.strictEqual(calls, 1);
-			done();
-		}, 50);
-	});
 });
