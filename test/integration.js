@@ -484,10 +484,15 @@ describe('Encrypted upload pipeline', function() {
 		var fs = require('fs');
 		var tmpDir, notty;
 
+		var NNTPServer = require('./_nntpsrv');
+		var rawPostPath;
+
 		before(function() {
 			tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nyuu-test-'));
 			notty = path.join(tmpDir, 'notty.json');
 			fs.writeFileSync(notty, JSON.stringify({colorize: false}));
+			rawPostPath = path.join(tmpDir, 'rawpost.bin');
+			fs.writeFileSync(rawPostPath, 'Message-ID: <test@msg.id>\r\nSubject: test\r\nFrom: test\r\nNewsgroups: rifles\r\n\r\n=ybegin line=128 size=4 name=test\r\ntest\r\n=yend size=4\r\n.\r\n');
 		});
 		after(function() {
 			fs.rmSync(tmpDir, {recursive: true, force: true});
@@ -506,6 +511,102 @@ describe('Encrypted upload pipeline', function() {
 				assert.doesNotMatch(stderr, /--encrypt-password.*required/);
 				assert.match(stderr, /Must supply at least one input file/);
 				done();
+			});
+		});
+
+		// helper: spins up a local NNTP listener and returns {server, port}
+		// tracking inbound connections; used to prove raw+encryption rejections
+		// happen before any network activity.
+		var makeListeningServer = function(cb) {
+			var connections = 0;
+			var server = new NNTPServer();
+			server.onConnect(function() {
+				connections++;
+			});
+			server.listen(0, function() {
+				cb(null, server, server.address().port, function() { return connections; });
+			});
+		};
+
+		it('rejects --input-raw-posts with --encrypt-password before any connection (NY-NEXT-2)', function(done) {
+			makeListeningServer(function(err, server, port, getConnections) {
+				if(err) return done(err);
+				child_process.execFile(process.execPath, [binNyuu, '-C', notty, '-h', '127.0.0.1', '-P', port, '--input-raw-posts', '--encrypt-password', 'secret', rawPostPath], function(err2, stdout, stderr) {
+					server.close(function() {
+						assert.ok(err2, 'should fail with non-zero exit code');
+						assert.match(stderr, /Encryption is not supported with `--input-raw-posts`/i, 'early diagnostic expected, got: ' + stderr);
+						assert.strictEqual(getConnections(), 0, 'zero connection attempts expected');
+						done();
+					});
+				});
+			});
+		});
+
+		it('rejects --input-raw-posts with --encrypt before any connection (NY-NEXT-2)', function(done) {
+			makeListeningServer(function(err, server, port, getConnections) {
+				if(err) return done(err);
+				child_process.execFile(process.execPath, [binNyuu, '-C', notty, '-h', '127.0.0.1', '-P', port, '--input-raw-posts', '--encrypt', '--encrypt-password', 'secret', rawPostPath], function(err2, stdout, stderr) {
+					server.close(function() {
+						assert.ok(err2, 'should fail with non-zero exit code');
+						assert.match(stderr, /Encryption is not supported with `--input-raw-posts`/i, 'early diagnostic expected, got: ' + stderr);
+						assert.strictEqual(getConnections(), 0, 'zero connection attempts expected');
+						done();
+					});
+				});
+			});
+		});
+
+		it('rejects config-enabled encryption with --input-raw-posts before any connection (NY-NEXT-2)', function(done) {
+			makeListeningServer(function(err, server, port, getConnections) {
+				if(err) return done(err);
+				var cfgPath = path.join(tmpDir, 'raw-enc-config.json');
+				fs.writeFileSync(cfgPath, JSON.stringify({
+					colorize: false,
+					'encrypt-password': 'secret'
+				}));
+				child_process.execFile(process.execPath, [binNyuu, '-C', cfgPath, '-h', '127.0.0.1', '-P', port, '--input-raw-posts', rawPostPath], function(err2, stdout, stderr) {
+					server.close(function() {
+						fs.unlinkSync(cfgPath);
+						assert.ok(err2, 'should fail with non-zero exit code');
+						assert.match(stderr, /Encryption is not supported with `--input-raw-posts`/i, 'early diagnostic expected, got: ' + stderr);
+						assert.strictEqual(getConnections(), 0, 'zero connection attempts expected');
+						done();
+					});
+				});
+			});
+		});
+
+		it('explicit --no-encrypt overrides config-enabled encryption for --input-raw-posts', function(done) {
+			makeListeningServer(function(err, server, port, getConnections) {
+				if(err) return done(err);
+				var cfgPath = path.join(tmpDir, 'raw-enc-config.json');
+				fs.writeFileSync(cfgPath, JSON.stringify({
+					colorize: false,
+					'encrypt-password': 'secret'
+				}));
+				child_process.execFile(process.execPath, [binNyuu, '-C', cfgPath, '-h', '127.0.0.1', '-P', port, '--input-raw-posts', '--no-encrypt', rawPostPath], function(err2, stdout, stderr) {
+					server.close(function() {
+						fs.unlinkSync(cfgPath);
+						assert.ifError(err2);
+						assert.doesNotMatch(stderr, /Encryption is not supported with `--input-raw-posts`/i);
+						assert.ok(getConnections() > 0, 'expected actual connection attempts in pass-through raw mode');
+						done();
+					});
+				});
+			});
+		});
+
+		it('already-encrypted raw input repost without encryption flags remains pass-through', function(done) {
+			makeListeningServer(function(err, server, port, getConnections) {
+				if(err) return done(err);
+				child_process.execFile(process.execPath, [binNyuu, '-C', notty, '-h', '127.0.0.1', '-P', port, '--input-raw-posts', rawPostPath], function(err2, stdout, stderr) {
+					server.close(function() {
+						assert.ifError(err2);
+						assert.doesNotMatch(stderr, /Encryption is not supported with `--input-raw-posts`/i);
+						assert.ok(getConnections() > 0, 'expected actual connection attempts in pass-through raw mode');
+						done();
+					});
+				});
 			});
 		});
 	});

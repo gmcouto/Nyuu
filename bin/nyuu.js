@@ -1064,12 +1064,15 @@ if(argv.meta) util.extend(ulOpts.nzb.metaData, argv.meta);
 var encPass = argv['encrypt-password'] !== undefined ? argv['encrypt-password'] : ulOpts.encryptionPassword;
 if(argv.encrypt === false) {
 	ulOpts.encryptionEnabled = false;
-} else if(argv.encrypt || encPass) {
+} else if(argv.encrypt || encPass || ulOpts.encryptionEnabled) {
 	if(!encPass)
 		error('`--encrypt-password` is required when encryption is enabled');
 	ulOpts.encryptionEnabled = true;
 	ulOpts.encryptionPassword = encPass;
 }
+
+if(argv['input-raw-posts'] && ulOpts.encryptionEnabled)
+	error('Encryption is not supported with `--input-raw-posts`');
 
 if(ulOpts.connectionThreads) {
 	var numConnections = 0;

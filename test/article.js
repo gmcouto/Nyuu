@@ -154,6 +154,106 @@ it('re-encrypts plaintext on reloadData without length mismatch or plaintext lea
 	});
 });
 
+it('clears complete encryptionResult on releaseData and release for pooled and unpooled posts (NY-NEXT-1)', function() {
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	[null, new BufferPool(4096)].forEach(function(pool) {
+		var a = new MultiEncoder('file', 768000, 768000, null, {
+			encryption: {key: key, salt: salt, segmentIndex: 1}
+		});
+		a.setHeaders({});
+		var plain = Buffer.alloc(768000, 0x42);
+		var post = a.generate(plain, pool);
+		assert.ok(post.encryptionResult);
+		assert.ok(post.encryptionResult.ciphertext);
+		assert.strictEqual(post.encryptionResult.ciphertext.length, 768000);
+		assert.strictEqual(post.encryptionResult.tag.length, 16);
+		// Ciphertext and tag share the same underlying sealed allocation
+		assert.strictEqual(post.encryptionResult.ciphertext.buffer, post.encryptionResult.tag.buffer);
+
+		post.releaseData();
+		assert.strictEqual(post.data === null, true, 'data must be null after releaseData');
+		assert.strictEqual(post.encryptionResult === null, true, 'encryptionResult must be cleared on releaseData');
+
+		post.reloadData(plain);
+		assert.ok(post.data);
+		assert.ok(post.encryptionResult);
+
+		post.release();
+		assert.strictEqual(post.data === null, true, 'data must be null after final release');
+		assert.strictEqual(post.encryptionResult === null, true, 'encryptionResult must be cleared on final release');
+	});
+});
+
+it('check-cache eviction clears complete encryptionResult, preserves identity, and allows reloading evicted post (NY-NEXT-1)', function() {
+	var CacheMgr = require('../lib/cachehelper');
+	var cryptoUtil = require('../lib/crypto');
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+
+	[null, new BufferPool(4096)].forEach(function(pool) {
+		var evictedPosts = [];
+		var checkCache = new CacheMgr(function(post) {
+			post.releaseData();
+			evictedPosts.push(post);
+		}, 5);
+
+		var numParts = 50;
+		var partSize = 1000;
+		var totalSize = numParts * partSize;
+		var encContext = {key: key, salt: salt, segmentIndex: 1};
+		var a = new MultiEncoder('testfile.bin', totalSize, partSize, null, {
+			encryption: encContext
+		});
+		a.setHeaders({});
+
+		// Generate part 1
+		var plain1 = Buffer.alloc(partSize, 0x11);
+		var post1 = a.generate(plain1, pool);
+		var wire1 = Buffer.from(post1.data);
+		var tag1 = Buffer.from(post1.encryptionResult.tag);
+		var index1 = post1.segmentIndex;
+		var msgId1 = post1.messageId;
+
+		var post1Id;
+		checkCache.add(post1, true, function(id) { post1Id = id; });
+		// Evict post 1 from checkCache
+		checkCache.evict(post1Id);
+		assert.strictEqual(post1.data === null, true);
+		assert.strictEqual(post1.encryptionResult === null, true);
+
+		// Generate subsequent parts 2..50, updating encoder's segmentIndex
+		for(var p = 2; p <= numParts; p++) {
+			encContext.segmentIndex = cryptoUtil.nextSafeSegmentIndex(encContext.segmentIndex);
+			var plainP = Buffer.alloc(partSize, p & 0xff);
+			var postP = a.generate(plainP, pool);
+			checkCache.add(postP, true);
+		}
+
+		// Cache size is 5, so at least 45 posts must have been evicted
+		assert.ok(evictedPosts.length >= 45, 'expected >= 45 evicted posts, got ' + evictedPosts.length);
+
+		// Verify all evicted posts retain no data and no encryptionResult (no ciphertext or tag)
+		evictedPosts.forEach(function(evicted, idx) {
+			assert.strictEqual(evicted.data === null, true, 'evicted post ' + idx + ' data must be null');
+			assert.strictEqual(evicted.encryptionResult === null, true, 'evicted post ' + idx + ' encryptionResult must be null');
+		});
+
+		// Reload post 1 and verify complete identity preserved
+		post1.reloadData(plain1);
+		assert.ok(post1.data);
+		assert.strictEqual(post1.data.toString('hex'), wire1.toString('hex'), 'wire data must match after reload');
+		assert.strictEqual(post1.encryptionResult.tag.toString('hex'), tag1.toString('hex'), 'tag must match after reload');
+		assert.strictEqual(post1.segmentIndex, index1, 'segmentIndex must match after reload');
+		assert.strictEqual(post1.messageId, msgId1, 'messageId must match after reload');
+
+		// Final release of post 1 clears all retained allocations
+		post1.release();
+		assert.strictEqual(post1.data === null, true);
+		assert.strictEqual(post1.encryptionResult === null, true);
+	});
+});
+
 it('pooled post grows undersized pooled buffer on reloadData instead of silently truncating article', function() {
 	var key = Buffer.alloc(32, 7);
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
