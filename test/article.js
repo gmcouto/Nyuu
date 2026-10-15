@@ -154,6 +154,68 @@ it('re-encrypts plaintext on reloadData without length mismatch or plaintext lea
 	});
 });
 
+it('refuses to re-encrypt changed source data under the original nonce and keeps the original fingerprint (UP7-1)', function() {
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	[null, new BufferPool(4096)].forEach(function(pool) {
+		var a = new MultiEncoder('file', 5, 5, null, {
+			encryption: {key: key, salt: salt, segmentIndex: 1}
+		});
+		a.setHeaders({});
+		var post = a.generate(toBuffer('AAAAA'), pool);
+		var oldTag = Buffer.from(post.encryptionResult.tag);
+		var oldCipher = Buffer.from(post.encryptionResult.ciphertext);
+		post.releaseData();
+		assert.throws(function() {
+			post.reloadData(toBuffer('BBBBB'));
+		}, function(e) {
+			return e instanceof Error && e.code == 'ENC_SOURCE_CHANGED';
+		}, 'reload of changed source must be refused');
+		if(pool) {
+			// the borrowed reload buffer must be returned to the pool exactly once
+			assert.equal(pool.pool.filter(function(b) { return b.length === 4096; }).length >= 1, true, 'borrowed buffer returned to pool');
+		}
+		// the original fingerprint must never be replaced, even after a rejected reread
+		post.reloadData(toBuffer('AAAAA'));
+		assert.equal(post.encryptionResult.tag.toString('hex'), oldTag.toString('hex'));
+		assert.equal(post.encryptionResult.ciphertext.toString('hex'), oldCipher.toString('hex'));
+	});
+});
+
+it('refuses a changed-source reload after evicted cache identity is gone but still reloads unchanged source (UP7-1, multi-part)', function() {
+	var key = Buffer.alloc(32, 7);
+	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	[null, new BufferPool(4096)].forEach(function(pool) {
+		var a = new MultiEncoder('file', 8, 4, null, {
+			encryption: {key: key, salt: salt, segmentIndex: 7}
+		});
+		a.setHeaders({});
+		var p1 = a.generate(toBuffer('AAAA'), pool);
+		var p2 = a.generate(toBuffer('BBBB'), pool);
+		var tag1 = Buffer.from(p1.encryptionResult.tag);
+		var cipher1 = Buffer.from(p1.encryptionResult.ciphertext);
+		p1.releaseData();
+		p2.releaseData();
+		assert.throws(function() { p1.reloadData(toBuffer('AAAB')); }, /nonce/);
+		assert.throws(function() { p2.reloadData(toBuffer('BBBA')); }, /nonce/);
+		// unchanged rereads still reload byte-identically
+		p1.reloadData(toBuffer('AAAA'));
+		assert.equal(p1.encryptionResult.tag.toString('hex'), tag1.toString('hex'));
+		assert.equal(p1.encryptionResult.ciphertext.toString('hex'), cipher1.toString('hex'));
+	});
+});
+
+it('ordinary (unencrypted) reloadData of changed source bytes is unchanged (UP7-1 control)', function() {
+	var a = new MultiEncoder('file', 5, 5, null, {});
+	a.setHeaders({});
+	var post = a.generate(toBuffer('AAAAA'));
+	var oldData = Buffer.from(post.data);
+	post.releaseData();
+	// without encryption a changed reread must still be accepted (upstream behavior)
+	post.reloadData(toBuffer('BBBBB'));
+	assert.notEqual(post.data.toString('hex'), oldData.toString('hex'));
+});
+
 it('clears complete encryptionResult on releaseData and release for pooled and unpooled posts (NY-NEXT-1)', function() {
 	var key = Buffer.alloc(32, 7);
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
