@@ -244,6 +244,102 @@ describe('Encrypted upload pipeline', function() {
 		});
 	});
 
+	// Body Std §8 (v1.2): yenc_version/yenc_cipher are OPTIONAL metadata that
+	// producers may emit, but only with the exact canonical values ("1.2" /
+	// "XChaCha20-Poly1305"). A receiver that consumes them MUST treat any other
+	// value (including empty) as a METADATA_VALIDATION failure. Nyuu emits
+	// neither entry, so a user-supplied conflicting value must be deleted from
+	// the emitted NZB (not overwritten), and the caller's object must be untouched.
+	it('deletes conflicting yenc_version and yenc_cipher metas when encryption is enabled (object form)', function() {
+		var captures = [];
+		cleanup = installOfflineSink(captures);
+		var xmlOutputs = [];
+		var callerMeta = {
+			yenc_version: '0.3',
+			yenc_cipher: ''
+		};
+		var opts = baseOpts({
+			encryptionEnabled: true,
+			encryptionPassword: 'secretpassword',
+			nzb: {
+				writeTo: function() { return makeXmlCapture(xmlOutputs); },
+				metaData: callerMeta
+			}
+		});
+		return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+			// caller's metaData must not be mutated
+			assert.equal(callerMeta.yenc_version, '0.3');
+			assert.equal(callerMeta.yenc_cipher, '');
+			// emitted NZB XML: required metadata present, conflicting optional
+			// metadata absent entirely
+			assert.equal(xmlOutputs.length, 1);
+			var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+			assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
+			assert.match(xml, /<meta type="password">secretpassword<\/meta>/);
+			assert.ok(xml.indexOf('yenc_version') < 0, 'conflicting yenc_version must not appear in emitted XML');
+			assert.ok(xml.indexOf('yenc_cipher') < 0, 'conflicting yenc_cipher must not appear in emitted XML');
+		});
+	});
+
+	it('deletes conflicting yenc_version and yenc_cipher metas when encryption is enabled (factory form)', function() {
+		var captures = [];
+		cleanup = installOfflineSink(captures);
+		var xmlOutputs = [];
+		var callerMeta;
+		var nzbFactory = function() {
+			callerMeta = {
+				yenc_version: '0.3',
+				yenc_cipher: ''
+			};
+			return ['custom_nzb', {
+				writeTo: function() { return makeXmlCapture(xmlOutputs); },
+				metaData: callerMeta
+			}];
+		};
+		var opts = baseOpts({
+			encryptionEnabled: true,
+			encryptionPassword: 'secretpassword',
+			nzb: nzbFactory
+		});
+		return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+			// caller factory's metadata is not mutated
+			assert.equal(callerMeta.yenc_version, '0.3');
+			assert.equal(callerMeta.yenc_cipher, '');
+			// emitted NZB XML: required metadata present, conflicting optional
+			// metadata absent entirely
+			assert.equal(xmlOutputs.length, 1);
+			var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+			assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
+			assert.match(xml, /<meta type="password">secretpassword<\/meta>/);
+			assert.ok(xml.indexOf('yenc_version') < 0, 'conflicting yenc_version must not appear in emitted XML');
+			assert.ok(xml.indexOf('yenc_cipher') < 0, 'conflicting yenc_cipher must not appear in emitted XML');
+		});
+	});
+
+	it('leaves yenc_version and yenc_cipher untouched when encryption is disabled', function() {
+		var captures = [];
+		cleanup = installOfflineSink(captures);
+		var xmlOutputs = [];
+		var callerMeta = {
+			yenc_version: '0.3',
+			yenc_cipher: ''
+		};
+		var opts = baseOpts({
+			encryptionEnabled: false,
+			nzb: {
+				writeTo: function() { return makeXmlCapture(xmlOutputs); },
+				metaData: callerMeta
+			}
+		});
+		return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+			assert.equal(xmlOutputs.length, 1);
+			var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+			assert.match(xml, /<meta type="yenc_version">0.3<\/meta>/);
+			assert.match(xml, /<meta type="yenc_cipher"><\/meta>/);
+			assert.ok(xml.indexOf('yenc_encrypted') < 0);
+		});
+	});
+
 	it('encryption password overwrites archive password without error when both are set', function() {
 		var captures = [];
 		cleanup = installOfflineSink(captures);
@@ -472,6 +568,119 @@ describe('Encrypted upload pipeline', function() {
 				assert.match(xml, /<meta type="password">transport-pw<\/meta>/);
 				assert.ok(xml.indexOf('archive-pw') < 0, 'archive password must not appear in emitted XML');
 				assert.equal(xml.match(/<meta type="password">/g).length, 1);
+			});
+		});
+	});
+
+	// UP-NY-2: a yencName override (literal or dynamic) is resolved and
+	// CR/LF/NUL-stripped inside MultiEncoder (lib/article.js), after the
+	// fileuploader preflight that only checks the original file name. For an
+	// encrypted upload the resolved name becomes the AEAD AAD subject, which
+	// Body Std §2.1 (v1.2) requires to be non-empty. The resulting RangeError
+	// must surface through the normal upload error callback exactly once -
+	// not escape as an uncaught exception from the read loop, which would
+	// hang the upload without ever delivering cb(err).
+	describe('effective empty yEnc name with encryption (UP-NY-2)', function() {
+		this.timeout(30000);
+
+		it('errors exactly once via the upload callback for an empty literal yencName override', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var opts = baseOpts({yencName: ''});
+			return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+				throw new Error('upload should have failed with an empty AAD name error');
+			}, function(err) {
+				assert.ok(err instanceof RangeError, 'expected RangeError, got: ' + err);
+				assert.match(err.message, /AAD name must not be empty/);
+				assert.equal(captures.length, 0, 'no articles may be posted for the failed file');
+			});
+		});
+
+		it('errors exactly once via the upload callback for a sanitized-to-empty literal yencName override', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var opts = baseOpts({yencName: '\r\n\0'});
+			return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+				throw new Error('upload should have failed with an empty AAD name error');
+			}, function(err) {
+				assert.ok(err instanceof RangeError, 'expected RangeError, got: ' + err);
+				assert.match(err.message, /AAD name must not be empty/);
+				assert.equal(captures.length, 0, 'no articles may be posted for the failed file');
+			});
+		});
+
+		it('errors exactly once via the upload callback for a dynamic yencName that sanitizes to empty, without re-evaluating the function', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var calls = 0;
+			var opts = baseOpts({yencName: function(fileNum, fileNumTotal, filename, size, part, parts) {
+				calls++;
+				return '\r\n\0';
+			}});
+			return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+				throw new Error('upload should have failed with an empty AAD name error');
+			}, function(err) {
+				assert.ok(err instanceof RangeError, 'expected RangeError, got: ' + err);
+				assert.match(err.message, /AAD name must not be empty/);
+				assert.equal(captures.length, 0, 'no articles may be posted for the failed file');
+				// established semantics: the name function is evaluated once
+				// per file (in the MultiEncoder constructor); the failure path
+				// must not add a second evaluation
+				assert.equal(calls, 1, 'dynamic name function must not be evaluated an extra time');
+			});
+		});
+
+		it('valid literal yencName override uploads encrypted with that name as the AAD subject', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var opts = baseOpts({yencName: 'renamed.bin'});
+			return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+				assert.equal(captures.length, 1);
+				var xchacha20poly1305 = require('@noble/ciphers/chacha').xchacha20poly1305;
+				var aad = cryptoUtil.buildBodyAad(1, 1, 5, Buffer.from('renamed.bin', 'utf8'));
+				var sealed = Buffer.concat([captures[0].ciphertext, captures[0].tag]);
+				var nonce = cryptoUtil.deriveBodyNonce(captures[0].key, captures[0].index);
+				var plain = Buffer.from(xchacha20poly1305(captures[0].key, nonce, aad).decrypt(sealed));
+				assert.equal(plain.toString(), 'hello');
+			});
+		});
+
+		it('valid dynamic yencName function is evaluated exactly once per file and its name is used as the AAD subject', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var calls = 0;
+			var args = null;
+			var opts = baseOpts({yencName: function(fileNum, fileNumTotal, filename, size, part, parts) {
+				calls++;
+				args = [fileNum, fileNumTotal, filename, size, part, parts];
+				return 'dyn-' + fileNum + '-' + filename;
+			}});
+			return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+				assert.equal(captures.length, 1);
+				assert.equal(calls, 1, 'dynamic name function must be evaluated exactly once per file');
+				assert.deepStrictEqual(args, [1, 1, 'file.bin', 5, 1, 1]);
+				var xchacha20poly1305 = require('@noble/ciphers/chacha').xchacha20poly1305;
+				var aad = cryptoUtil.buildBodyAad(1, 1, 5, Buffer.from('dyn-1-file.bin', 'utf8'));
+				var sealed = Buffer.concat([captures[0].ciphertext, captures[0].tag]);
+				var nonce = cryptoUtil.deriveBodyNonce(captures[0].key, captures[0].index);
+				var plain = Buffer.from(xchacha20poly1305(captures[0].key, nonce, aad).decrypt(sealed));
+				assert.equal(plain.toString(), 'hello');
+			});
+		});
+
+		// Ordinary (non-encrypted) uploads keep upstream behavior: the empty
+		// override is written verbatim into the =ybegin header and the upload
+		// succeeds - no AAD exists to validate, so nothing fails.
+		it('ordinary unencrypted upload keeps upstream behavior for an empty yencName override', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var opts = baseOpts({encryptionEnabled: false, yencName: ''});
+			return startUpload(makeStream('file.bin', 'hello'), opts).then(function() {
+				assert.equal(captures.length, 1);
+				assert.strictEqual(captures[0].salt, null, 'upload must not be encrypted');
+				var body = captures[0].data.toString('ascii');
+				assert.ok(body.indexOf('=ybegin') >= 0, 'ordinary yEnc header present');
+				assert.ok(body.indexOf(' name=\r\n') >= 0, 'empty override written verbatim into =ybegin');
 			});
 		});
 	});
