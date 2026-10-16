@@ -805,6 +805,72 @@ describe('Encrypted upload pipeline', function() {
 			});
 		});
 
+		// DEC-3 / NY-R10-02: full JS configs merge `encryptionPassword` and
+		// `encryptionEnabled` directly onto ulOpts (isFullConfig && confType == 'js'),
+		// bypassing the CLI opt mapping. The three neighboring semantics are pinned
+		// here via the same --input-raw-posts probe used above: encryption enabled
+		// rejects raw posts before any connection, disabled passes through.
+		// Full JS configs assign `module.exports = {...}` (as config.js does);
+		// the `exports` token is how bin/nyuu.js detects a JS config, and
+		// `isFullConfig: true` selects the direct ulOpts merge path.
+
+		it('full JS config with encryptionEnabled:false and a password does not enable encryption (NY-R10-02 case 3)', function(done) {
+			makeListeningServer(function(err, server, port, getConnections) {
+				if(err) return done(err);
+				var cfgPath = path.join(tmpDir, 'full-disabled.js');
+				fs.writeFileSync(cfgPath, 'module.exports = {isFullConfig: true, encryptionPassword: "secret", encryptionEnabled: false, cli: {colorize: false}};\n');
+				child_process.execFile(process.execPath, [binNyuu, '-C', cfgPath, '-h', '127.0.0.1', '-P', port, '--input-raw-posts', rawPostPath], function(err2, stdout, stderr) {
+					server.close(function() {
+						fs.unlinkSync(cfgPath);
+						try {
+							assert.ifError(err2);
+							assert.doesNotMatch(stderr, /Encryption is not supported with `--input-raw-posts`/i);
+							assert.ok(getConnections() > 0, 'expected actual connection attempts in pass-through raw mode');
+							done();
+						} catch(e) { done(e); }
+					});
+				});
+			});
+		});
+
+		it('explicit --encrypt overrides a full JS config that disables encryption (NY-R10-02 case 1)', function(done) {
+			makeListeningServer(function(err, server, port, getConnections) {
+				if(err) return done(err);
+				var cfgPath = path.join(tmpDir, 'full-disabled-cli-encrypt.js');
+				fs.writeFileSync(cfgPath, 'module.exports = {isFullConfig: true, encryptionPassword: "secret", encryptionEnabled: false, cli: {colorize: false}};\n');
+				child_process.execFile(process.execPath, [binNyuu, '-C', cfgPath, '-h', '127.0.0.1', '-P', port, '--input-raw-posts', '--encrypt', rawPostPath], function(err2, stdout, stderr) {
+					server.close(function() {
+						fs.unlinkSync(cfgPath);
+						try {
+							assert.ok(err2, 'should fail with non-zero exit code');
+							assert.match(stderr, /Encryption is not supported with `--input-raw-posts`/i, 'early diagnostic expected, got: ' + stderr);
+							assert.strictEqual(getConnections(), 0, 'zero connection attempts expected');
+							done();
+						} catch(e) { done(e); }
+					});
+				});
+			});
+		});
+
+		it('full JS config with a password and no encryptionEnabled still enables encryption (NY-R10-02 case 2)', function(done) {
+			makeListeningServer(function(err, server, port, getConnections) {
+				if(err) return done(err);
+				var cfgPath = path.join(tmpDir, 'full-password-only.js');
+				fs.writeFileSync(cfgPath, 'module.exports = {isFullConfig: true, encryptionPassword: "secret", cli: {colorize: false}};\n');
+				child_process.execFile(process.execPath, [binNyuu, '-C', cfgPath, '-h', '127.0.0.1', '-P', port, '--input-raw-posts', rawPostPath], function(err2, stdout, stderr) {
+					server.close(function() {
+						fs.unlinkSync(cfgPath);
+						try {
+							assert.ok(err2, 'should fail with non-zero exit code');
+							assert.match(stderr, /Encryption is not supported with `--input-raw-posts`/i, 'early diagnostic expected, got: ' + stderr);
+							assert.strictEqual(getConnections(), 0, 'zero connection attempts expected');
+							done();
+						} catch(e) { done(e); }
+					});
+				});
+			});
+		});
+
 		it('already-encrypted raw input repost without encryption flags remains pass-through', function(done) {
 			makeListeningServer(function(err, server, port, getConnections) {
 				if(err) return done(err);
