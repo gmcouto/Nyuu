@@ -1062,6 +1062,8 @@ if(argv.meta) util.extend(ulOpts.nzb.metaData, argv.meta);
 // encryption is enabled by `--encrypt` or implicitly by `--encrypt-password`;
 // the combined wire mode (body + control lines) is the only mode offered
 var encPass = argv['encrypt-password'] !== undefined ? argv['encrypt-password'] : ulOpts.encryptionPassword;
+if(argv.encrypt !== false && argv['encrypt-password'] !== undefined && !argv['encrypt-password'])
+	error('`--encrypt-password` must not be empty');
 if(argv.encrypt === false || (argv.encrypt === undefined && argv['encrypt-password'] === undefined && ulOpts.encryptionEnabled === false)) {
 	ulOpts.encryptionEnabled = false;
 } else if(argv.encrypt || encPass || ulOpts.encryptionEnabled) {

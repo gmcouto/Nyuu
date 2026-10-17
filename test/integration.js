@@ -363,6 +363,114 @@ describe('Encrypted upload pipeline', function() {
 		});
 	});
 
+	describe('wire-level decryption of a pipeline article (NY12-04)', function() {
+		this.timeout(30000);
+
+		it('FF1-restores, verifies dual-bootstrap agreement, AEAD-decrypts to the source bytes, and NZB segment bytes equals plaintext length', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var xmlOutputs = [];
+			var ff1 = require('../lib/ff1');
+			var y = require('yencode');
+			var xchacha20poly1305 = require('@noble/ciphers/chacha').xchacha20poly1305;
+			// ~200 bytes over articleSize 32 => multiple encrypted segments
+			var source = Buffer.alloc(200);
+			for(var i = 0; i < source.length; i++) source[i] = (i * 37 + 11) & 0xff;
+			var opts = baseOpts({
+				nzb: {
+					writeTo: function() { return makeXmlCapture(xmlOutputs); },
+					metaData: {}
+				}
+			});
+			var streamFile = [{name: 'wire.bin', size: source.length, stream: Readable.from([source])}];
+			return startUpload(streamFile, opts).then(function() {
+				assert.ok(captures.length > 1, 'expected a multi-segment upload');
+				var key = captures[0].key;
+				var plaintextByIndex = {};
+				captures.forEach(function(cap) {
+					// article body = bytes after the NNTP header blank line
+					var headerEnd = cap.data.indexOf('\r\n\r\n');
+					assert.ok(headerEnd >= 0, 'article headers present');
+					var wireBody = cap.data.subarray(headerEnd + 4);
+					// dot-unstuff (RFC 3977) and drop the ".\r\n" terminator
+					var terminator = wireBody.lastIndexOf('\r\n.\r\n');
+					assert.ok(terminator >= 0, 'article terminator present');
+					var unstuffed = Buffer.from(wireBody.subarray(0, terminator + 2).toString('binary').replace(/\r\n\./g, '\r\n'), 'binary');
+					assert.ok(unstuffed.indexOf('=ybegin') < 0, 'no plaintext control lines on the wire');
+					// FF1-restore the control lines; Line 1 carries the bootstrap
+					var restored = ff1.decryptControlLines(unstuffed, key);
+					var bootSalt = restored.salt;
+					var bootIndex = restored.segmentIndex;
+					assert.ok(bootSalt.equals(cap.salt), 'bootstrap salt matches the upload salt');
+					assert.equal(bootIndex, cap.index, 'bootstrap index matches the allocated segment index');
+					var text = restored.block.toString('binary');
+					var lines = text.split('\r\n');
+					assert.ok(lines[0].indexOf('=ybegin ') === 0, 'restored Line 1 is =ybegin: ' + lines[0]);
+					// locate the restored =yencryption line and check agreement
+					var yencLine = null, ypartLine = null;
+					lines.forEach(function(l) {
+						if(l.indexOf('=yencryption ') === 0) yencLine = l;
+						if(l.indexOf('=ypart ') === 0) ypartLine = l;
+					});
+					assert.ok(yencLine, 'restored =yencryption line present');
+					assert.equal(yencLine.length, 128, '=yencryption line is exactly 128 chars');
+					var m = yencLine.match(/^=yencryption cipher=XChaCha20-Poly1305 salt=([0-9a-f]{32}) index=([0-9a-f]{8}) tag=([0-9a-f]{32})$/);
+					assert.ok(m, '=yencryption grammar: ' + yencLine);
+					// Line-1 bootstrap == =yencryption salt/index agreement
+					assert.equal(m[1], bootSalt.toString('hex'), 'bootstrap salt == =yencryption salt');
+					assert.equal(parseInt(m[2], 16), bootIndex, 'bootstrap index == =yencryption index');
+					assert.equal(m[1], cap.salt.toString('hex'));
+					assert.equal(m[3], cap.tag.toString('hex'), '=yencryption tag matches the AEAD tag');
+					// restored =ybegin keywords before name= (Q-B token boundary)
+					var nameAt = lines[0].indexOf(' name=');
+					assert.ok(nameAt > 0, 'name= token present on =ybegin');
+					var name = lines[0].substring(nameAt + 6);
+					assert.equal(name, 'wire.bin');
+					var partMatch = lines[0].match(/part=(\d+)/);
+					assert.ok(partMatch, 'part= present on =ybegin');
+					var partNumber = parseInt(partMatch[1], 10);
+					var begin = 1;
+					if(ypartLine) {
+						var bm = ypartLine.match(/begin=(\d+)/);
+						assert.ok(bm, 'begin= present on =ypart');
+						begin = parseInt(bm[1], 10);
+					}
+					// yEnc-decode the data lines between the =yencryption line
+					// and the =yend footer, then AEAD-decrypt to the source bytes
+					var encIdx = lines.indexOf(yencLine);
+					var endIdx = -1;
+					lines.forEach(function(l, i) { if(l.indexOf('=yend ') === 0) endIdx = i; });
+					assert.ok(endIdx > encIdx, '=yend footer after =yencryption');
+					var ciphertext = y.decode(Buffer.from(lines.slice(encIdx + 1, endIdx).join('\r\n'), 'binary'));
+					assert.ok(ciphertext.equals(cap.ciphertext), 'wire ciphertext matches the encrypted segment');
+					var aad = cryptoUtil.buildBodyAad(partNumber, begin, ciphertext.length, Buffer.from(name, 'utf8'));
+					var nonce = cryptoUtil.deriveBodyNonce(key, bootIndex);
+					var plain = Buffer.from(xchacha20poly1305(key, nonce, aad).decrypt(Buffer.concat([ciphertext, Buffer.from(m[3], 'hex')])));
+					plaintextByIndex[bootIndex] = plain;
+				});
+				// segments reassemble (in segment-index order) to the source bytes
+				var ordered = Object.keys(plaintextByIndex).map(Number).sort(function(a, b) { return a - b; })
+					.map(function(k) { return plaintextByIndex[k]; });
+				assert.ok(Buffer.concat(ordered).equals(source), 'AEAD-decrypted segments reassemble to the source bytes');
+				// NZB <segment bytes> == plaintext (source segment) length
+				assert.equal(xmlOutputs.length, 1);
+				var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+				assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
+				var segBytes = [];
+				var segRe = /<segment bytes="(\d+)" number="(\d+)">/g, sm;
+				while((sm = segRe.exec(xml))) segBytes[parseInt(sm[2], 10) - 1] = parseInt(sm[1], 10);
+				assert.equal(segBytes.length, captures.length, 'one NZB segment per article');
+				// NZB segment order is the posting order; captures are in the
+				// same order, so bytes[number-1] is that segment's plaintext length
+				captures.forEach(function(cap, i) {
+					assert.equal(segBytes[i], cap.ciphertext.length, 'segment bytes == plaintext length for segment ' + (i + 1));
+				});
+				var total = segBytes.reduce(function(a, b) { return a + b; }, 0);
+				assert.equal(total, source.length, 'segment bytes sum to the source length');
+			});
+		});
+	});
+
 	describe('encrypted upload state isolation', function() {
 		this.timeout(30000);
 
@@ -541,6 +649,99 @@ describe('Encrypted upload pipeline', function() {
 			});
 		});
 
+		it('caller-supplied encryption context still gets NZB encryption meta without re-deriving the key (NY12-02)', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var xmlOutputs = [];
+			var suppliedKey = Buffer.alloc(32, 9);
+			var suppliedSalt = cryptoUtil.generateEncryptionSalt();
+			var suppliedContext = {key: suppliedKey, salt: suppliedSalt};
+			var callerMeta = {custom: 'value'};
+			var callerNzb = {
+				writeTo: function() { return makeXmlCapture(xmlOutputs); },
+				metaData: callerMeta
+			};
+			var opts = baseOpts({
+				encryption: suppliedContext,
+				encryptionPassword: 'supplied-pw',
+				nzb: callerNzb
+			});
+			return startUpload(makeStream('same.bin', 'AAAAA'), opts).then(function() {
+				assert.equal(captures.length, 1);
+				// the supplied key/salt were used directly (no re-derivation)
+				assert.ok(captures[0].key.equals(suppliedKey));
+				assert.ok(captures[0].salt.equals(suppliedSalt));
+				assert.strictEqual(opts.encryption, suppliedContext);
+				// caller's nzb/metaData objects are not mutated
+				assert.strictEqual(opts.nzb, callerNzb);
+				assert.equal(callerMeta.yenc_encrypted, undefined);
+				assert.equal(callerMeta.password, undefined);
+				// emitted NZB XML carries the encryption meta
+				assert.equal(xmlOutputs.length, 1);
+				var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+				assert.match(xml, /<meta type="custom">value<\/meta>/);
+				assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
+				assert.match(xml, /<meta type="password">supplied-pw<\/meta>/);
+			});
+		});
+
+		it('caller-supplied encryption context with factory-form nzb still gets NZB encryption meta (NY12-02)', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var xmlOutputs = [];
+			var suppliedKey = Buffer.alloc(32, 9);
+			var suppliedSalt = cryptoUtil.generateEncryptionSalt();
+			var callerMeta;
+			var nzbFactory = function() {
+				callerMeta = {custom: 'value'};
+				return ['custom_nzb', {
+					writeTo: function() { return makeXmlCapture(xmlOutputs); },
+					metaData: callerMeta
+				}];
+			};
+			var opts = baseOpts({
+				encryption: {key: suppliedKey, salt: suppliedSalt},
+				encryptionPassword: 'supplied-pw',
+				nzb: nzbFactory
+			});
+			return startUpload(makeStream('same.bin', 'AAAAA'), opts).then(function() {
+				assert.equal(captures.length, 1);
+				assert.ok(captures[0].key.equals(suppliedKey));
+				assert.ok(captures[0].salt.equals(suppliedSalt));
+				assert.strictEqual(opts.nzb, nzbFactory);
+				assert.equal(callerMeta.yenc_encrypted, undefined);
+				assert.equal(callerMeta.password, undefined);
+				assert.equal(xmlOutputs.length, 1);
+				var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+				assert.match(xml, /<meta type="yenc_encrypted">true<\/meta>/);
+				assert.match(xml, /<meta type="password">supplied-pw<\/meta>/);
+			});
+		});
+
+		it('caller-supplied encryption context without a known password emits no encryption meta (NY12-02)', function() {
+			var captures = [];
+			cleanup = installOfflineSink(captures);
+			var xmlOutputs = [];
+			var suppliedKey = Buffer.alloc(32, 9);
+			var suppliedSalt = cryptoUtil.generateEncryptionSalt();
+			var opts = baseOpts({
+				encryption: {key: suppliedKey, salt: suppliedSalt},
+				encryptionPassword: undefined,
+				nzb: {
+					writeTo: function() { return makeXmlCapture(xmlOutputs); },
+					metaData: {}
+				}
+			});
+			return startUpload(makeStream('same.bin', 'AAAAA'), opts).then(function() {
+				assert.equal(captures.length, 1);
+				assert.ok(captures[0].key.equals(suppliedKey));
+				assert.equal(xmlOutputs.length, 1);
+				var xml = Buffer.concat(xmlOutputs[0]).toString('utf8');
+				assert.ok(xml.indexOf('yenc_encrypted') < 0, 'no marker without a known password');
+				assert.ok(xml.indexOf('<meta type="password">') < 0, 'no password meta without a known password');
+			});
+		});
+
 		it('emitted encryption password is authoritative over an emitted archive password', function() {
 			var captures = [];
 			cleanup = installOfflineSink(captures);
@@ -675,6 +876,108 @@ describe('Encrypted upload pipeline', function() {
 				assert.ok(body.indexOf('=ybegin') >= 0, 'ordinary yEnc header present');
 				assert.ok(body.indexOf(' name=\r\n') >= 0, 'empty override written verbatim into =ybegin');
 			});
+		});
+	});
+
+	// NY12-03: encrypted-path throws from submitPost (index exhaustion and
+	// non-AAD crypto failures inside enc.generate) must reach the upload
+	// callback exactly once via fileDone, not escape the read loop.
+	// Ordinary-post throws keep the upstream throw-out behavior.
+	describe('encrypted submitPost error routing (NY12-03)', function() {
+		this.timeout(30000);
+		var UploadManager = require('../lib/uploadmgr');
+		// UploadManager captures `lib/uploader` at load time; stub the
+		// instance's uploader so addFile can run without any network.
+		function makeManager(opts, cb) {
+			var mgr;
+			try {
+				mgr = new UploadManager(opts, cb || function() {});
+			} catch(e) {
+				// uploader construction may need servers; fall back to a
+				// bare instance carrying only what addFile touches
+				mgr = Object.create(UploadManager.prototype);
+				mgr.opts = opts;
+				mgr.articleSize = opts.articleSize || 768000;
+				mgr.segmentIndex = 0;
+				mgr.nzbs = {};
+				mgr.bufferPool = null;
+				mgr.dateOverride = null;
+			}
+			mgr.uploader = {
+				addPost: function(post, readCb, postedCb) { postedCb(null); readCb(null); },
+				finished: function() {},
+				cancel: function() {}
+			};
+			return mgr;
+		}
+		function fakeStream(chunks) {
+			var i = 0;
+			return {
+				read: function(size, cb) {
+					if(i < chunks.length) cb(null, chunks[i++]);
+					else cb(null, Buffer.alloc(0));
+				}
+			};
+		}
+
+		it('routes segmentIndex exhaustion through fileDone exactly once', function(done) {
+			// a valid supplied context so enc.encryption is set
+			var mgr = makeManager(baseOpts({useBufferPool: false, encryption: {key: Buffer.alloc(32, 1), salt: cryptoUtil.generateEncryptionSalt()}}));
+			// pre-exhaust the allocator: the next index allocation throws
+			mgr.segmentIndex = 0xFFFFFFFF;
+			var calls = 0, seenErr = null;
+			mgr.addFile({name: 'file.bin', size: 5, num: 1}, 1, {}, fakeStream([Buffer.from('hello')]), function(err) {
+				calls++;
+				seenErr = err;
+				setImmediate(function() {
+					try {
+						assert.equal(calls, 1, 'fileDone must be called exactly once');
+						assert.ok(seenErr, 'exhaustion error expected');
+						assert.match(seenErr.message, /segmentIndex space exhausted/);
+						done();
+					} catch(e) { done(e); }
+				});
+			});
+		});
+
+		it('routes a non-AAD crypto throw from enc.generate through fileDone exactly once', function(done) {
+			var mgr = makeManager(baseOpts({useBufferPool: false}));
+			// a 31-byte key makes encryptBody throw a RangeError that is not
+			// the AAD-name error
+			mgr.opts.encryption = {key: Buffer.alloc(31), salt: cryptoUtil.generateEncryptionSalt()};
+			var calls = 0, seenErr = null;
+			mgr.addFile({name: 'file.bin', size: 5, num: 1}, 1, {}, fakeStream([Buffer.from('hello')]), function(err) {
+				calls++;
+				seenErr = err;
+				setImmediate(function() {
+					try {
+						assert.equal(calls, 1, 'fileDone must be called exactly once');
+						assert.ok(seenErr, 'crypto error expected');
+						assert.match(seenErr.message, /must be exactly 32 bytes/);
+						done();
+					} catch(e) { done(e); }
+				});
+			});
+		});
+
+		it('ordinary-post throws still escape submitPost (upstream behavior untouched)', function() {
+			var mgr = makeManager(baseOpts({encryptionEnabled: false, encryptionPassword: undefined, useBufferPool: false}));
+			delete mgr.opts.encryption;
+			// an ordinary generate() throw (here: invalid article state from
+			// a stream that yields a chunk after EOF signalling) must keep
+			// escaping instead of being routed to fileDone
+			var ArticleEncoder2 = require('../lib/article');
+			var origGenerate = ArticleEncoder2.prototype.generate;
+			ArticleEncoder2.prototype.generate = function() { throw new Error('ordinary boom'); };
+			try {
+				assert.throws(function() {
+					mgr.addFile({name: 'file.bin', size: 5, num: 1}, 1, {}, fakeStream([Buffer.from('hello')]), function() {
+						throw new Error('fileDone must not be called for an ordinary throw');
+					});
+				}, /ordinary boom/);
+			} finally {
+				ArticleEncoder2.prototype.generate = origGenerate;
+			}
 		});
 	});
 
@@ -842,6 +1145,29 @@ describe('Encrypted upload pipeline', function() {
 						} catch(e) { done(e); }
 					});
 				});
+			});
+		});
+
+		it('fails when explicit --encrypt-password is empty (NY12-01)', function(done) {
+			// `--encrypt-password=` is the explicit-empty form (a bare
+			// trailing '' is rejected earlier by the arg parser itself)
+			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt-password='], function(err, stdout, stderr) {
+				try {
+					assert.ok(err, 'should fail with non-zero exit code');
+					assert.match(stderr, /--encrypt-password.*must not be empty/);
+					assert.doesNotMatch(stderr, /Must supply at least one input file/);
+					done();
+				} catch(e) { done(e); }
+			});
+		});
+
+		it('fails when explicit --encrypt-password is empty even with --encrypt (NY12-01)', function(done) {
+			child_process.execFile(process.execPath, [binNyuu, '-C', notty, '--encrypt', '--encrypt-password='], function(err, stdout, stderr) {
+				try {
+					assert.ok(err, 'should fail with non-zero exit code');
+					assert.match(stderr, /--encrypt-password.*must not be empty/);
+					done();
+				} catch(e) { done(e); }
 			});
 		});
 
