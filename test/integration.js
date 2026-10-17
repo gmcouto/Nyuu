@@ -370,7 +370,7 @@ describe('Encrypted upload pipeline', function() {
 			var captures = [];
 			cleanup = installOfflineSink(captures);
 			var xmlOutputs = [];
-			var ff1 = require('../lib/ff1');
+			var ff1Decrypt = require('./_ff1decrypt');
 			var y = require('yencode');
 			var xchacha20poly1305 = require('@noble/ciphers/chacha').xchacha20poly1305;
 			// ~200 bytes over articleSize 32 => multiple encrypted segments
@@ -398,7 +398,7 @@ describe('Encrypted upload pipeline', function() {
 					var unstuffed = Buffer.from(wireBody.subarray(0, terminator + 2).toString('binary').replace(/\r\n\./g, '\r\n'), 'binary');
 					assert.ok(unstuffed.indexOf('=ybegin') < 0, 'no plaintext control lines on the wire');
 					// FF1-restore the control lines; Line 1 carries the bootstrap
-					var restored = ff1.decryptControlLines(unstuffed, key);
+					var restored = ff1Decrypt.decryptControlLines(unstuffed, key);
 					var bootSalt = restored.salt;
 					var bootIndex = restored.segmentIndex;
 					assert.ok(bootSalt.equals(cap.salt), 'bootstrap salt matches the upload salt');

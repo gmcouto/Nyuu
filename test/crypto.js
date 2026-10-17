@@ -5,6 +5,7 @@ var path = require('path');
 
 var cryptoCore = require('../lib/crypto');
 var ff1 = require('../lib/ff1');
+var ff1Decrypt = require('./_ff1decrypt');
 // Exercise individual lines through the production block API.
 function encryptControlLine(line, key, segmentIndex, lineIndex, salt) {
 	var prefix = Buffer.from('=ybegin name=test\r\n' + '\r\n'.repeat(Math.max(0, lineIndex - 2)));
@@ -157,6 +158,27 @@ describe('yEnc encryption crypto', function() {
 				Buffer.from(vector.salt_hex, 'hex')
 			);
 			assert.deepEqual(encrypted, expected, vecId);
+		});
+	});
+
+	it('test-only FF1 decryptor restores the vendored control-line vectors', function() {
+		['control-vec-07-full-article-5-lines', 'control-vec-08-full-article-54-lines',
+			'control-vec-09-one-byte-data', 'control-vec-10-exact-wrap-article-6-lines',
+			'control-vec-11-combined-one-byte-data', 'control-vec-12-single-part-name-contains-part'
+		].forEach(function(vecId) {
+			var vector = controlVectors.vectors.filter(function(item) {
+				return item.id === vecId;
+			})[0];
+			assert(vector, 'missing vector ' + vecId);
+			var masterKey = Buffer.from(nonceVectors.control_tweak_vectors[0].master_key_hex, 'hex');
+			var block = Buffer.from(vector.input_lines.join('\r\n') + '\r\n', 'ascii');
+			var input = Buffer.concat(vector.expected_wire_lines_hex.map(function(line) {
+				return Buffer.concat([Buffer.from(line, 'hex'), Buffer.from('\r\n', 'ascii')]);
+			}));
+			var restored = ff1Decrypt.decryptControlLines(input, masterKey);
+			assert.deepEqual(restored.block, block, vecId + ' block');
+			assert.equal(restored.salt.toString('hex'), vector.salt_hex, vecId + ' salt');
+			assert.equal(restored.segmentIndex, vector.segment_index, vecId + ' segmentIndex');
 		});
 	});
 
