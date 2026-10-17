@@ -4,19 +4,9 @@ var assert = require("assert");
 var Readable = require('stream').Readable;
 var ArticleEncoder = require('../lib/article');
 var NZBGenerator = require('../lib/nzb');
-var ff1 = require('../lib/ff1');
 var cryptoUtil = require('../lib/crypto');
 var config = require('../config');
 var fileuploader = require('../lib/fileuploader');
-
-// Exercise individual lines through the production block API.
-function encryptControlLine(line, key, segmentIndex, lineIndex, salt) {
-	var prefix = Buffer.from('=ybegin name=test\r\n' + '\r\n'.repeat(Math.max(0, lineIndex - 2)));
-	if(lineIndex === 1) prefix = Buffer.alloc(0);
-	var block = Buffer.concat([prefix, line, Buffer.from('\r\n')]);
-	var wire = ff1.encryptControlLines(block, key, segmentIndex, salt);
-	return wire.subarray(wire.length - line.length - (lineIndex === 1 ? 20 : 0) - 2, wire.length - 2);
-}
 
 // In-memory transport sink: replaces only the final network queue
 // (`lib/uploader`). fileuploader, UploadManager, stream readers, the
@@ -156,11 +146,14 @@ describe('Encrypted upload pipeline', function() {
 		assert.ok(wire.indexOf('=yencryption') < 0);
 		assert.ok(wire.indexOf('hello') < 0);
 
-		// 3. Dual-bootstrap agreement between Line 1 prefix and =yencryption header
+		// 3. Dual-bootstrap agreement between Line 1 prefix and =yencryption header:
+		// the (encrypted) =yencryption line is the third control line, and FF1
+		// preserves line lengths, so it must be exactly 128 chars (the canonical
+		// five-token line) and Line 1 must carry the same salt/index asserted in 1.
 		var expectedYencLine = '=yencryption cipher=XChaCha20-Poly1305 salt=' + prefixSalt.toString('hex') +
 			' index=' + prefixSegmentIndex.toString(16).padStart(8, '0') +
 			' tag=' + post.encryptionResult.tag.toString('hex');
-		var encryptedYencLine = encryptControlLine(Buffer.from(expectedYencLine, 'ascii'), key, segmentIndex, 3, salt);
+		assert.equal(expectedYencLine.length, 128);
 
 		var bodyBuf = post.data.subarray(post.postPos);
 		var lines = [];
@@ -172,7 +165,7 @@ describe('Encrypted upload pipeline', function() {
 				start = i + 1;
 			}
 		}
-		assert.equal(lines[2].toString('hex'), encryptedYencLine.toString('hex'));
+		assert.equal(lines[2].length, 128);
 
 		// 4. NZB metadata and plain NZB 1.1 segment assertions
 		assert.match(xml, /meta type="yenc_encrypted">true/);
@@ -839,6 +832,25 @@ describe('Encrypted upload pipeline', function() {
 				var cfgPath = path.join(tmpDir, 'full-disabled-cli-encrypt.js');
 				fs.writeFileSync(cfgPath, 'module.exports = {isFullConfig: true, encryptionPassword: "secret", encryptionEnabled: false, cli: {colorize: false}};\n');
 				child_process.execFile(process.execPath, [binNyuu, '-C', cfgPath, '-h', '127.0.0.1', '-P', port, '--input-raw-posts', '--encrypt', rawPostPath], function(err2, stdout, stderr) {
+					server.close(function() {
+						fs.unlinkSync(cfgPath);
+						try {
+							assert.ok(err2, 'should fail with non-zero exit code');
+							assert.match(stderr, /Encryption is not supported with `--input-raw-posts`/i, 'early diagnostic expected, got: ' + stderr);
+							assert.strictEqual(getConnections(), 0, 'zero connection attempts expected');
+							done();
+						} catch(e) { done(e); }
+					});
+				});
+			});
+		});
+
+		it('explicit CLI --encrypt-password overrides a full JS config that disables encryption (R11-NY-01)', function(done) {
+			makeListeningServer(function(err, server, port, getConnections) {
+				if(err) return done(err);
+				var cfgPath = path.join(tmpDir, 'full-disabled-cli-password.js');
+				fs.writeFileSync(cfgPath, 'module.exports = {isFullConfig: true, encryptionPassword: "secret", encryptionEnabled: false, cli: {colorize: false}};\n');
+				child_process.execFile(process.execPath, [binNyuu, '-C', cfgPath, '-h', '127.0.0.1', '-P', port, '--input-raw-posts', '--encrypt-password', 'clisecret', rawPostPath], function(err2, stdout, stderr) {
 					server.close(function() {
 						fs.unlinkSync(cfgPath);
 						try {

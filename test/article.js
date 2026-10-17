@@ -185,13 +185,17 @@ it('refuses to re-encrypt changed source data under the original nonce and keeps
 it('refuses a changed-source reload after evicted cache identity is gone but still reloads unchanged source (UP7-1, multi-part)', function() {
 	var key = Buffer.alloc(32, 7);
 	var salt = Buffer.from('0102030405060708090b0c0e0f101112', 'hex');
+	var cryptoUtil = require('../lib/crypto');
 	[null, new BufferPool(4096)].forEach(function(pool) {
+		var encContext = {key: key, salt: salt, segmentIndex: 7};
 		var a = new MultiEncoder('file', 8, 4, null, {
-			encryption: {key: key, salt: salt, segmentIndex: 7}
+			encryption: encContext
 		});
 		a.setHeaders({});
 		var p1 = a.generate(toBuffer('AAAA'), pool);
+		encContext.segmentIndex = cryptoUtil.nextSafeSegmentIndex(encContext.segmentIndex);
 		var p2 = a.generate(toBuffer('BBBB'), pool);
+		assert.notEqual(p1.segmentIndex, p2.segmentIndex);
 		var tag1 = Buffer.from(p1.encryptionResult.tag);
 		var cipher1 = Buffer.from(p1.encryptionResult.ciphertext);
 		p1.releaseData();
