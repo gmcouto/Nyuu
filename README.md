@@ -296,6 +296,10 @@ Article bodies are encrypted with XChaCha20-Poly1305 and control lines
 are encrypted with Radix 253 FF1. Generated NZBs include standard
 `<meta type="yenc_encrypted">true</meta>` and `<meta type="password">` tags.
 
+Heads up: encrypted uploads need a downloader that supports this too.
+People using an ordinary downloader won't be able to download them
+properly.
+
 CLI flags:
 - `--encrypt`: Enable yEnc body and control-line encryption (combined wire mode).
 - `--encrypt-password <pass>`: Specify the encryption password. Specifying this option enables encryption.
